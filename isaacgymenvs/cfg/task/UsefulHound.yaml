@@ -65,7 +65,7 @@ env:
     RR_knee_joint: -1.5708   # [rad]
 
   urdfAsset:
-    file: "urdf/Hound_new/Hound.urdf"
+    file: "urdf/UsefulHound/urdf/Hound.urdf"
     footName: "foot" # SHANK if collapsing fixed joint, FOOT otherwise
     kneeName: "thigh"
     calfName: "calf"
@@ -81,10 +81,10 @@ env:
     linearVelocityZRewardScale: -4.0
     angularVelocityXYRewardScale: -0.05
     angularVelocityZRewardScale: 0.5
-    orientationRewardScale: -1. #-1.
+    orientationRewardScale: -10. #-1.
     torqueRewardScale: -0.00002 # -0.000025
     jointAccRewardScale: -0.0005 # -0.0025
-    baseHeightRewardScale: -5.0 #5
+    baseHeightRewardScale: -5.0 #-5
     feetAirTimeRewardScale:  1.0
     kneeCollisionRewardScale: -0.25 
     feetStumbleRewardScale: -0. #-2.0

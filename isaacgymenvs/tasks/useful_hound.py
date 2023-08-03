@@ -117,7 +117,7 @@ class UsefulHound(VecTask):
         actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
         dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
         net_contact_forces = self.gym.acquire_net_contact_force_tensor(self.sim)
-
+        
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
@@ -125,8 +125,9 @@ class UsefulHound(VecTask):
         # create some wrapper tensors for different slices
         self.root_states = gymtorch.wrap_tensor(actor_root_state)
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
-        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
-        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
+
+        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof+6, 2)[:, 0:12, 0] # FIX
+        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof+6, 2)[:, 0:12, 1] # FIX
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
 
         # initialize some data used later on
@@ -229,7 +230,7 @@ class UsefulHound(VecTask):
         asset_options.disable_gravity = False
 
         anymal_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        self.num_dof = self.gym.get_asset_dof_count(anymal_asset)
+        self.num_dof = self.gym.get_asset_dof_count(anymal_asset) - 6 # FIX
         self.num_bodies = self.gym.get_asset_rigid_body_count(anymal_asset)
 
         # prepare friction randomization
@@ -338,7 +339,7 @@ class UsefulHound(VecTask):
         rew_orient = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1) * self.rew_scales["orient"]
 
         # base height penalty
-        rew_base_height = torch.square(self.root_states[:, 2] - 0.48) * self.rew_scales["base_height"] # TODO add target base height to cfg  # 0.52
+        rew_base_height = torch.square(self.root_states[:, 2] - 0.52) * self.rew_scales["base_height"] # TODO add target base height to cfg  # 0.52
 
         # torque penalty
         rew_torque = torch.sum(torch.square(self.torques), dim=1) * self.rew_scales["torque"]
@@ -395,7 +396,6 @@ class UsefulHound(VecTask):
     def reset_idx(self, env_ids):
         positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
         velocities = torch_rand_float(-0.1, 0.1, (len(env_ids), self.num_dof), device=self.device)
-
         self.dof_pos[env_ids] = self.default_dof_pos[env_ids] * positions_offset
         self.dof_vel[env_ids] = velocities
 
@@ -454,8 +454,12 @@ class UsefulHound(VecTask):
         for i in range(self.decimation):
             torques = torch.clip(self.Kp*(self.action_scale*self.actions + self.default_dof_pos - self.dof_pos) - self.Kd*self.dof_vel,
                                  -80., 80.)
+            torques_arm = torch.zeros(self.num_envs,6, device=self.device) # FIX
+            torques = torch.cat([torques,torques_arm], axis=1) # FIX
+
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torques))
-            self.torques = torques.view(self.torques.shape)
+            self.torques = torques[:,0:12] # FIX
+            #self.torques = torques.view(self.torques.shape)
             self.gym.simulate(self.sim)
             if self.device == 'cpu':
                 self.gym.fetch_results(self.sim, True)
