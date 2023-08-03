@@ -247,11 +247,14 @@ class UsefulHound(VecTask):
         self.dof_names = self.gym.get_asset_dof_names(anymal_asset)
         foot_name = self.cfg["env"]["urdfAsset"]["footName"]
         knee_name = self.cfg["env"]["urdfAsset"]["kneeName"]
-        calf_name = self.cfg["env"]["urdfAsset"]["calfName"]
+        base_name = self.cfg["env"]["urdfAsset"]["baseName"]
+        #calf_name = self.cfg["env"]["urdfAsset"]["calfName"]
         feet_names = [s for s in body_names if foot_name in s]
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
         knee_names = [s for s in body_names if knee_name in s]
         self.knee_indices = torch.zeros(len(knee_names), dtype=torch.long, device=self.device, requires_grad=False)
+        base_names = [s for s in body_names if base_name in s]
+        self.base_indices = torch.zeros(len(base_names), dtype=torch.long, device=self.device, requires_grad=False)
         # calf_names = [s for s in body_names if calf_name in s]
         # self.calf_indices = torch.zeros(len(calf_names), dtype=torch.long, device=self.device, requires_grad=False)
         self.base_index = 0
@@ -292,6 +295,8 @@ class UsefulHound(VecTask):
             self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], feet_names[i])
         for i in range(len(knee_names)):
             self.knee_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], knee_names[i])
+        for i in range(len(base_names)):
+            self.base_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], base_names[i])
         # for i in range(len(calf_names)):
         #     self.calf_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], calf_names[i])
 
@@ -300,6 +305,7 @@ class UsefulHound(VecTask):
     def check_termination(self):
         self.reset_buf = torch.norm(self.contact_forces[:, self.base_index, :], dim=1) > 1.
         self.reset_buf = self.reset_buf | torch.any(torch.norm(self.contact_forces[:, self.knee_indices, :], dim=2) > 1., dim=1)
+        self.reset_buf = self.reset_buf | torch.any(torch.norm(self.contact_forces[:, self.base_indices, :], dim=2) > 1., dim=1)
         # self.reset_buf = self.reset_buf | torch.any(torch.norm(self.contact_forces[:, self.calf_indices, :], dim=2) > 1., dim=1)
         time_out = self.progress_buf >= self.max_episode_length - 1  # no terminal reward for time-outs
         self.reset_buf = self.reset_buf | time_out
