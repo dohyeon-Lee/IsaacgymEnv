@@ -18,8 +18,8 @@ env:
   clipObservations: 5.0
   clipActions: 1.0
 
-  startPositionNoise: 0.25
-  startRotationNoise: 0.785
+  startPositionNoise: 0.25 # Not use
+  startRotationNoise: 0.785 # Not use
   houndarmPositionNoise: 0.0
   houndarmRotationNoise: 0.0
   houndarmDofNoise: 0.25

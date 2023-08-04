@@ -317,11 +317,14 @@ class Houndarm(VecTask):
         jacobian = gymtorch.wrap_tensor(_jacobian)
 
         hand_joint_index = self.gym.get_actor_joint_dict(env_ptr, houndarm_handle)['joint6']
+        print(jacobian.size())
+        
         self._j_eef = jacobian[:, hand_joint_index, :, :6]
         # self._j_eef = jacobian[:, hand_joint_index, :, :7]
         _massmatrix = self.gym.acquire_mass_matrix_tensor(self.sim, "houndarm")
         mm = gymtorch.wrap_tensor(_massmatrix)
         self._mm = mm[:, :6, :6]
+   
         # self._mm = mm[:, :7, :7]
         # self._cubeA_state = self._root_state[:, self._cubeA_id, :]
         # self._cubeB_state = self._root_state[:, self._cubeB_id, :]
@@ -419,7 +422,7 @@ class Houndarm(VecTask):
             self.houndarm_dof_lower_limits.unsqueeze(0), self.houndarm_dof_upper_limits) # TODO limit are in urdf
 
         # Overwrite gripper init pos (no noise since these are always position controlled)
-        pos[:, -2:] = self.houndarm_default_dof_pos[-2:]
+        #pos[:, -2:] = self.houndarm_default_dof_pos[-2:]
 
         # Reset the internal obs accordingly
         self._q[env_ids, :] = pos
@@ -461,6 +464,7 @@ class Houndarm(VecTask):
         # Helpful resource: studywolf.wordpress.com/2013/09/17/robot-control-4-operation-space-control/
         q, qd = self._q[:, :6], self._qd[:, :6]
         #q, qd = self._q[:, :7], self._qd[:, :7]
+        
         mm_inv = torch.inverse(self._mm)
         m_eef_inv = self._j_eef @ mm_inv @ torch.transpose(self._j_eef, 1, 2)
         m_eef = torch.inverse(m_eef_inv)

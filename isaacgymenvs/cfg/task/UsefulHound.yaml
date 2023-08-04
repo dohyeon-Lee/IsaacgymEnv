@@ -5,10 +5,17 @@ physics_engine: 'physx'
 
 env:
   numEnvs: ${resolve_default:4096,${...num_envs}}
-  numObservations: 188
-  numActions: 12
+  numObservations: 204 #(Hound pos)3 + (Hound vel)3 + (Hound ori)3 + (Hound command)3 + (Hound lastact)18 + (Hound dof pos)12 + (Hound dof vel)12 + (groundvis)140 + (manipulator)3+4+3
+  numActions: 18 # (Hound)12 + (manipulator)6
   envSpacing: 3.  # [m]
   enableDebugVis: False
+
+  ############################
+  ## for manipulator #########
+  houndarmPositionNoise: 0.0
+  houndarmRotationNoise: 0.0
+  houndarmDofNoise: 0.25
+  houndarmcontrolType: osc
 
   terrain:
     terrainType: plane # trimesh # none, plane, or trimesh
@@ -38,6 +45,12 @@ env:
     linear_x: [-2., 2.] # min max [m/s]
     linear_y: [-1., 1.]   # min max [m/s]
     yaw: [-1., 1.]    # min max [rad/s]
+  ############################
+  ## for manipulator #########
+  randomArmCommandPositionRanges:
+    x: [-0.3, 0.3] 
+    y: [-0.3, 0.3] 
+    z: [0.1, 0.3]    
 
   control:
     # PD Drive parameters:
@@ -45,6 +58,11 @@ env:
     damping: 2.0     # [N*m*s/rad]
     # action scale: target angle = actionScale * action + defaultAngle
     actionScale: 0.5
+
+    ############################
+    ## for manipulator #########
+    houndarmactionScale: 1.0
+    
     # decimation: Number of control action updates @ sim DT per policy DT
     decimation: 4
 
@@ -70,6 +88,7 @@ env:
     kneeName: "thigh"
     baseName: "shoulder"
     calfName: "calf"
+    endpointName: "end_link"
     collapseFixedJoints: false
     fixBaseLink: false
     defaultDofDriveMode: 4 # see GymDofDriveModeFlags (0 is none, 1 is pos tgt, 2 is vel tgt, 4 effort)
@@ -83,15 +102,24 @@ env:
     angularVelocityXYRewardScale: -0.05
     angularVelocityZRewardScale: 0.5
 
-    orientationRewardScale: 0 #-1. #-1.
+    orientationRewardScale: -1 #-1. #-1.
     torqueRewardScale: -0.00002 # -0.000025
     jointAccRewardScale: -0.0005 # -0.0025
-    baseHeightRewardScale: 0 #-5.0 #5
+    baseHeightRewardScale: -4 #-5.0 #5
 
     feetAirTimeRewardScale:  1.0
     kneeCollisionRewardScale: -0.25 
     feetStumbleRewardScale: -0. #-2.0
     actionRateRewardScale: -0.01
+
+    ############################
+    ## for manipulator #########
+    distRewardScale: 0.1
+    liftRewardScale: 1.5
+    alignRewardScale: 2.0
+    stackRewardScale: 16.0
+    velRewardScale: 0.1
+
     # cosmetics
     hipRewardScale: -0. #25
 
