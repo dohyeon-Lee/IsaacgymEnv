@@ -330,7 +330,7 @@ class HoundTerrain(VecTask):
                                     ), dim=-1)
 
     def compute_reward(self):
-        # velocity tracking reward
+        # velocity tracking reward TODO similer with paper
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
         ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
         rew_lin_vel_xy = torch.exp(-lin_vel_error/0.25) * self.rew_scales["lin_vel_xy"]
