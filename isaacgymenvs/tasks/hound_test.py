@@ -36,11 +36,45 @@ from .base.vec_task import VecTask
 import torch
 from typing import Tuple, Dict
 
-from isaacgymenvs.utils.torch_jit_utils import to_torch, get_axis_params, torch_rand_float, normalize, quat_apply, quat_rotate_inverse
+from isaacgymenvs.utils.torch_jit_utils import to_torch, quat_mul,quat_rotate, get_axis_params, torch_rand_float, normalize, quat_apply, quat_rotate_inverse, tensor_clamp
 from isaacgymenvs.tasks.base.vec_task import VecTask
 
 
-class HoundTerrain(VecTask):
+@torch.jit.script
+def axisangle2quat(vec, eps=1e-6):
+    """
+    Converts scaled axis-angle to quat.
+    Args:
+        vec (tensor): (..., 3) tensor where final dim is (ax,ay,az) axis-angle exponential coordinates
+        eps (float): Stability value below which small values will be mapped to 0
+
+    Returns:
+        tensor: (..., 4) tensor where final dim is (x,y,z,w) vec4 float quaternion
+    """
+    # type: (Tensor, float) -> Tensor
+    # store input shape and reshape
+    input_shape = vec.shape[:-1]
+    vec = vec.reshape(-1, 3)
+
+    # Grab angle
+    angle = torch.norm(vec, dim=-1, keepdim=True)
+
+    # Create return array
+    quat = torch.zeros(torch.prod(torch.tensor(input_shape)), 4, device=vec.device)
+    quat[:, 3] = 1.0
+
+    # Grab indexes where angle is not zero an convert the input to its quaternion form
+    idx = angle.reshape(-1) > eps
+    quat[idx, :] = torch.cat([
+        vec[idx, :] * torch.sin(angle[idx, :] / 2.0) / angle[idx, :],
+        torch.cos(angle[idx, :] / 2.0)
+    ], dim=-1)
+
+    # Reshape and return output
+    quat = quat.reshape(list(input_shape) + [4, ])
+    return quat
+
+class HoundTest(VecTask):
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render):
 
@@ -57,6 +91,45 @@ class HoundTerrain(VecTask):
         self.dof_vel_scale = self.cfg["env"]["learn"]["dofVelocityScale"]
         self.height_meas_scale = self.cfg["env"]["learn"]["heightMeasurementScale"]
         self.action_scale = self.cfg["env"]["control"]["actionScale"]
+
+        ###########################################################################
+        ## for arm ################################################################
+        self.arm_action_scale = self.cfg["env"]["control"]["houndarmactionScale"]
+        self.houndarm_dof_noise = self.cfg["env"]["houndarmDofNoise"]
+        self.arm_reward_settings = {
+            "r_dist_scale": self.cfg["env"]["learn"]["distRewardScale"],
+            "r_vel_scale": self.cfg["env"]["learn"]["velRewardScale"],
+        }
+        
+        self.arm_control_type = self.cfg["env"]["houndarmcontrolType"]
+
+        # command ranges
+        self.arm_command_x_range = self.cfg["env"]["randomArmCommandPositionRanges"]["x"]
+        self.arm_command_y_range = self.cfg["env"]["randomArmCommandPositionRanges"]["y"]
+        self.arm_command_z_range = self.cfg["env"]["randomArmCommandPositionRanges"]["z"]
+
+        # Tensor placeholders
+        self._root_state = None             # State of root body        (n_envs, 13)
+        self._dof_state = None  # State of all joints       (n_envs, n_dof)
+        self._q = None  # Joint positions           (n_envs, n_dof)
+        self._qd = None                     # Joint velocities          (n_envs, n_dof)
+        self._rigid_body_state = None  # State of all rigid bodies             (n_envs, n_bodies, 13)
+        self._contact_forces = None     # Contact forces in sim
+        self._eef_state = None  # end effector state (at grasping point)
+        self._relative_eef_state = None 
+        self._eef_lf_state = None  # end effector state (at left fingertip)
+        self._eef_rf_state = None  # end effector state (at left fingertip)
+        self._j_eef = None  # Jacobian for end effector
+        self._mm = None  # Mass matrix
+        self._arm_control = None  # Tensor buffer for controlling arm
+        self._gripper_control = None  # Tensor buffer for controlling gripper
+        self._pos_control = None            # Position actions
+        self._effort_control = None         # Torque actions
+        self._houndarm_effort_limits = None        # Actuator effort limits for houndarm
+        self._global_indices = None         # Unique indices corresponding to all envs in flattened array
+       
+        ###########################################################################
+        ###########################################################################
 
         # reward scales
         self.rew_scales = {}
@@ -79,7 +152,7 @@ class HoundTerrain(VecTask):
         self.command_x_range = self.cfg["env"]["randomCommandVelocityRanges"]["linear_x"]
         self.command_y_range = self.cfg["env"]["randomCommandVelocityRanges"]["linear_y"]
         self.command_yaw_range = self.cfg["env"]["randomCommandVelocityRanges"]["yaw"]
-
+        
         # base init state
         pos = self.cfg["env"]["baseInitState"]["pos"]
         rot = self.cfg["env"]["baseInitState"]["rot"]
@@ -88,7 +161,7 @@ class HoundTerrain(VecTask):
         self.base_init_state = pos + rot + v_lin + v_ang
 
         # default joint positions
-        self.named_default_joint_angles = self.cfg["env"]["defaultJointAngles"]
+        self.named_hound_default_joint_angles = self.cfg["env"]["defaultJointAngles"]
 
         # other
         self.decimation = self.cfg["env"]["control"]["decimation"]
@@ -117,7 +190,7 @@ class HoundTerrain(VecTask):
         actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
         dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
         net_contact_forces = self.gym.acquire_net_contact_force_tensor(self.sim)
-
+        
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
@@ -125,8 +198,9 @@ class HoundTerrain(VecTask):
         # create some wrapper tensors for different slices
         self.root_states = gymtorch.wrap_tensor(actor_root_state)
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
-        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
-        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
+  
+        self.hound_dof_pos = self.dof_state.view(self.num_envs, self.total_num_dof, 2)[:, 0:12, 0] # FIX
+        self.hound_dof_vel = self.dof_state.view(self.num_envs, self.total_num_dof, 2)[:, 0:12, 1] # FIX
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
 
         # initialize some data used later on
@@ -141,22 +215,48 @@ class HoundTerrain(VecTask):
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.feet_air_time = torch.zeros(self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False)
-        self.last_dof_vel = torch.zeros_like(self.dof_vel)
+        self.last_hound_dof_vel = torch.zeros_like(self.hound_dof_vel)
 
         self.height_points = self.init_height_points()
         self.measured_heights = None
         # joint positions offsets
-        self.default_dof_pos = torch.zeros_like(self.dof_pos, dtype=torch.float, device=self.device, requires_grad=False)
-        for i in range(self.num_actions):
+        self.hound_default_dof_pos = torch.zeros_like(self.hound_dof_pos, dtype=torch.float, device=self.device, requires_grad=False)
+        for i in range(12):
             name = self.dof_names[i]
-            angle = self.named_default_joint_angles[name]
-            self.default_dof_pos[:, i] = angle
+            angle = self.named_hound_default_joint_angles[name]
+            self.hound_default_dof_pos[:, i] = angle
         # reward episode sums
         torch_zeros = lambda : torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
         self.episode_sums = {"lin_vel_xy": torch_zeros(), "lin_vel_z": torch_zeros(), "ang_vel_z": torch_zeros(), "ang_vel_xy": torch_zeros(),
                              "orient": torch_zeros(), "torques": torch_zeros(), "joint_acc": torch_zeros(), "base_height": torch_zeros(),
                              "air_time": torch_zeros(), "collision": torch_zeros(), "stumble": torch_zeros(), "action_rate": torch_zeros(), "hip": torch_zeros()}
+        
+        ###########################################################################
+        ## for arm ################################################################
+        self.houndarm_default_dof_pos = to_torch(
+            [0, 0, 0, 0, 0, 0], device=self.device
+        )
+        # OSC Gains
+        self.arm_kp = to_torch([150.] * 6, device=self.device)
+        self.arm_kd = 2 * torch.sqrt(self.arm_kp)
+        self.arm_kp_null = to_torch([10.] * 6, device=self.device)
+        self.arm_kd_null = 2 * torch.sqrt(self.arm_kp_null)
+        #self.cmd_limit = None                   # filled in later
 
+        # Set control limits (osc: operation space control, cmd_limit : x y z r p y )
+        self.arm_cmd_limit = to_torch([0.1, 0.1, 0.1, 0.5, 0.5, 0.5], device=self.device).unsqueeze(0)
+
+        # TODO add command
+        self.arm_commands = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
+        self.arm_commands_x = self.arm_commands.view(self.num_envs, 3)[..., 0]
+        self.arm_commands_y = self.arm_commands.view(self.num_envs, 3)[..., 1]
+        self.arm_commands_z = self.arm_commands.view(self.num_envs, 3)[..., 2]
+        ###########################################################################
+        ###########################################################################
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
+        self.gym.refresh_jacobian_tensors(self.sim)
+        self.gym.refresh_mass_matrix_tensors(self.sim)
         self.reset_idx(torch.arange(self.num_envs, device=self.device))
         self.init_done = True
 
@@ -216,7 +316,7 @@ class HoundTerrain(VecTask):
         asset_file = os.path.basename(asset_path)
 
         asset_options = gymapi.AssetOptions()
-        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_EFFORT
+        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_POS
         asset_options.collapse_fixed_joints = self.cfg["env"]["urdfAsset"]["collapseFixedJoints"]
         asset_options.replace_cylinder_with_capsule = False
         asset_options.flip_visual_attachments = False
@@ -229,11 +329,15 @@ class HoundTerrain(VecTask):
         asset_options.disable_gravity = False
 
         anymal_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        self.num_dof = self.gym.get_asset_dof_count(anymal_asset)
+        
+        self.total_num_dof = self.gym.get_asset_dof_count(anymal_asset) # FIX
+        self.hound_num_dof = self.total_num_dof - 6 # FIX
+        self.arm_num_dof = self.total_num_dof - self.hound_num_dof 
+
         self.num_bodies = self.gym.get_asset_rigid_body_count(anymal_asset)
 
         # prepare friction randomization
-        rigid_shape_prop = self.gym.get_asset_rigid_shape_properties(anymal_asset)
+        rigid_shape_prop = self.gym.get_asset_rigid_shape_properties(anymal_asset) # TODO FIX
         friction_range = self.cfg["env"]["learn"]["frictionRange"]
         num_buckets = 100
         friction_buckets = torch_rand_float(friction_range[0], friction_range[1], (num_buckets,1), device=self.device)
@@ -244,21 +348,57 @@ class HoundTerrain(VecTask):
 
         body_names = self.gym.get_asset_rigid_body_names(anymal_asset)
         self.dof_names = self.gym.get_asset_dof_names(anymal_asset)
+
         foot_name = self.cfg["env"]["urdfAsset"]["footName"]
         knee_name = self.cfg["env"]["urdfAsset"]["kneeName"]
         base_name = self.cfg["env"]["urdfAsset"]["baseName"]
-        #calf_name = self.cfg["env"]["urdfAsset"]["calfName"]
+        endpoint_name = self.cfg["env"]["urdfAsset"]["endpointName"]
+
         feet_names = [s for s in body_names if foot_name in s]
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
         knee_names = [s for s in body_names if knee_name in s]
         self.knee_indices = torch.zeros(len(knee_names), dtype=torch.long, device=self.device, requires_grad=False)
         base_names = [s for s in body_names if base_name in s]
         self.base_indices = torch.zeros(len(base_names), dtype=torch.long, device=self.device, requires_grad=False)
-        # calf_names = [s for s in body_names if calf_name in s]
-        # self.calf_indices = torch.zeros(len(calf_names), dtype=torch.long, device=self.device, requires_grad=False)
+        # eef_names = [s for s in body_names if endpoint_name in s]
+        # self.eef_indices = torch.zeros(len(eef_names), dtype=torch.long, device=self.device, requires_grad=False)
         self.base_index = 0
 
         dof_props = self.gym.get_asset_dof_properties(anymal_asset)
+
+        ######################################################################
+        ## for arm ###########################################################
+        houndarm_dof_stiffness = to_torch([0, 0, 0, 0, 0, 0], dtype=torch.float, device=self.device)
+        houndarm_dof_damping = to_torch([0, 0, 0, 0, 0, 0], dtype=torch.float, device=self.device)
+
+        self.houndarm_dof_lower_limits = []
+        self.houndarm_dof_upper_limits = []
+        self._houndarm_effort_limits = []
+
+        for _i in range(self.arm_num_dof):
+            i = _i + self.hound_num_dof
+            dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
+            # if self.physics_engine == gymapi.SIM_PHYSX:
+            #     dof_props['stiffness'][i] = houndarm_dof_stiffness[_i]
+            #     dof_props['damping'][i] = houndarm_dof_damping[_i]
+            # else:
+            dof_props['stiffness'][i] = 7000.0
+            dof_props['damping'][i] = 50.0
+
+            self.houndarm_dof_lower_limits.append(dof_props['lower'][i])
+            self.houndarm_dof_upper_limits.append(dof_props['upper'][i])
+            self._houndarm_effort_limits.append(dof_props['effort'][i])
+        for i in range(self.hound_num_dof):
+            dof_props['stiffness'][i] = 5* 10**20 #7000.0
+            dof_props['damping'][i] = 500.0
+        print(dof_props['stiffness'])
+        print(dof_props['damping'])
+        self.houndarm_dof_lower_limits = to_torch(self.houndarm_dof_lower_limits, device=self.device)
+        self.houndarm_dof_upper_limits = to_torch(self.houndarm_dof_upper_limits, device=self.device)
+        self._houndarm_effort_limits = to_torch(self._houndarm_effort_limits, device=self.device)
+        self.houndarm_dof_speed_scales = torch.ones_like(self.houndarm_dof_lower_limits)
+        #######################################################################
+        #######################################################################
 
         # env origins
         self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
@@ -285,7 +425,7 @@ class HoundTerrain(VecTask):
             for s in range(len(rigid_shape_prop)):
                 rigid_shape_prop[s].friction = friction_buckets[i % num_buckets] # TODO give friction randomly
             self.gym.set_asset_rigid_shape_properties(anymal_asset, rigid_shape_prop) 
-            anymal_handle = self.gym.create_actor(env_handle, anymal_asset, start_pose, "houndterrain", i, 0, 0)
+            anymal_handle = self.gym.create_actor(env_handle, anymal_asset, start_pose, "UsefulHound", i, 0, 0)
             self.gym.set_actor_dof_properties(env_handle, anymal_handle, dof_props)
             self.envs.append(env_handle)
             self.anymal_handles.append(anymal_handle)
@@ -296,10 +436,42 @@ class HoundTerrain(VecTask):
             self.knee_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], knee_names[i])
         for i in range(len(base_names)):
             self.base_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], base_names[i])
-        # for i in range(len(calf_names)):
-        #     self.calf_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], calf_names[i])
-
+        # for i in range(len(eef_names)):
+        #     self.eef_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], eef_names[i])
+        self.eef_index = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], "end_link")
         self.base_index = self.gym.find_actor_rigid_body_handle(self.envs[0], self.anymal_handles[0], "trunk")
+
+
+        ##################################################################################
+        ## for arm #######################################################################
+        _rigid_body_state_tensor = self.gym.acquire_rigid_body_state_tensor(self.sim)
+        self._rigid_body_state = gymtorch.wrap_tensor(_rigid_body_state_tensor).view(self.num_envs, -1, 13)
+        _dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
+        self.dof_state = gymtorch.wrap_tensor(_dof_state_tensor).view(self.num_envs, -1, 2)
+        self._q = self.dof_state[:, 12:, 0]
+        self._qd = self.dof_state[:, 12:, 1]
+        self._root_state = self._rigid_body_state[:, self.base_index, :]
+        self._eef_state = self._rigid_body_state[:, self.eef_index, :]
+        
+        
+        _jacobian = self.gym.acquire_jacobian_tensor(self.sim, "UsefulHound")
+        jacobian = gymtorch.wrap_tensor(_jacobian)
+        hand_joint_index = self.gym.get_actor_joint_dict(self.envs[0], self.anymal_handles[0])['joint6']
+        self._j_eef = jacobian[:, hand_joint_index, :, :6]
+        _massmatrix = self.gym.acquire_mass_matrix_tensor(self.sim, "UsefulHound")
+        mm = gymtorch.wrap_tensor(_massmatrix)
+        
+        self._mm = mm[:, -6:, -6:]
+        
+        # Initialize actions
+        self._pos_control = torch.zeros((self.num_envs, self.arm_num_dof), dtype=torch.float, device=self.device)
+        self._effort_control = torch.zeros_like(self._pos_control)
+        # Initialize control
+        self._arm_control = self._effort_control[:, :6]
+        # Initialize indices (if there is other object in gym, it will be useful)
+        self._global_indices = torch.arange(self.num_envs, dtype=torch.int32, device=self.device).view(self.num_envs, -1)
+        ##################################################################################
+        ##################################################################################
 
     def check_termination(self):
         self.reset_buf = torch.norm(self.contact_forces[:, self.base_index, :], dim=1) > 1.
@@ -317,93 +489,118 @@ class HoundTerrain(VecTask):
         # self.reset_buf = torch.where(self.progress_buf >= self.max_episode_length - 1, torch.ones_like(self.reset_buf), self.reset_buf)
 
     def compute_observations(self):
-        self.measured_heights = self.get_heights()
-        heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.height_meas_scale
-        self.obs_buf = torch.cat((  self.base_lin_vel * self.lin_vel_scale,
-                                    self.base_ang_vel  * self.ang_vel_scale,
-                                    self.projected_gravity,
-                                    self.commands[:, :3] * self.commands_scale,
-                                    self.dof_pos * self.dof_pos_scale,
-                                    self.dof_vel * self.dof_vel_scale,
-                                    heights,
-                                    self.actions
+        # self.measured_heights = self.get_heights()
+        # heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.height_meas_scale
+        # self.obs_buf = torch.cat((  self.base_lin_vel * self.lin_vel_scale,
+        #                             self.base_ang_vel  * self.ang_vel_scale,
+        #                             self.projected_gravity,
+        #                             self.commands[:, :3] * self.commands_scale,
+        #                             self.hound_dof_pos * self.dof_pos_scale,
+        #                             self.hound_dof_vel * self.dof_vel_scale,
+        #                             heights,
+        #                             self.actions,
+
+        #                             self._eef_state[:, :3],
+        #                             self._eef_state[:, 3:7],
+        #                             self.arm_commands[:,:]
+        #                             ), dim=-1)
+        self.obs_buf = torch.cat((  self._relative_eef_state[:, :3],  # eef_pos
+                                    self._eef_state[:, 3:7], # eef_quat
+                                    self.arm_commands[:,:]   # commands
                                     ), dim=-1)
 
     def compute_reward(self):
-        # velocity tracking reward TODO similer with paper
-        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
-        rew_lin_vel_xy = torch.exp(-lin_vel_error/0.25) * self.rew_scales["lin_vel_xy"]
-        rew_ang_vel_z = torch.exp(-ang_vel_error/0.25) * self.rew_scales["ang_vel_z"]
 
-        # other base velocity penalties
-        rew_lin_vel_z = torch.square(self.base_lin_vel[:, 2]) * self.rew_scales["lin_vel_z"]
-        rew_ang_vel_xy = torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1) * self.rew_scales["ang_vel_xy"]
+        # print(self._root_state[0, :3])
+        # print(self._eef_state[0,:3])
+        self._relative_eef_state = self._eef_state - self._root_state
+        # print(self._relative_eef_state[0,:3])
+        # print(self.arm_commands[0,:])
+        # print("ggggggggggggggggggggggggggggggggggggggggggg")
+        distance_rewards = 1 - torch.tanh(10.0 * (torch.norm(self._relative_eef_state[:, :3] - self.arm_commands[:,:], dim=-1)))  #1 / (1 + torch.norm(states["eef_pos"] - states["commands"], dim=-1))
+        velocity_rewards = 0
+        
+        distance_in_reach = (torch.norm(self._relative_eef_state[:, :3] - self.arm_commands[:,:], dim=-1) < 0.02)
+        velocity_rewards = 1 - torch.tanh(10.0 * torch.norm(self._relative_eef_state[:, 7:], dim=-1))
+        rewards = distance_rewards * self.arm_reward_settings["r_dist_scale"] + velocity_rewards * distance_in_reach * self.arm_reward_settings["r_vel_scale"]
+        rewards = torch.clip(rewards, 0., None)
 
-        # orientation penalty
-        rew_orient = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1) * self.rew_scales["orient"]
+        self.rew_buf = rewards
+        # # velocity tracking reward
+        # lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
+        # ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
+        # rew_lin_vel_xy = torch.exp(-lin_vel_error/0.25) * self.rew_scales["lin_vel_xy"]
+        # rew_ang_vel_z = torch.exp(-ang_vel_error/0.25) * self.rew_scales["ang_vel_z"]
 
-        # base height penalty
-        rew_base_height = torch.square(self.root_states[:, 2] - 0.48) * self.rew_scales["base_height"] # TODO add target base height to cfg  # 0.52
+        # # other base velocity penalties
+        # rew_lin_vel_z = torch.square(self.base_lin_vel[:, 2]) * self.rew_scales["lin_vel_z"]
+        # rew_ang_vel_xy = torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1) * self.rew_scales["ang_vel_xy"]
 
-        # torque penalty
-        rew_torque = torch.sum(torch.square(self.torques), dim=1) * self.rew_scales["torque"]
+        # # orientation penalty
+        # rew_orient = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1) * self.rew_scales["orient"]
 
-        # joint acc penalty
-        rew_joint_acc = torch.sum(torch.square(self.last_dof_vel - self.dof_vel), dim=1) * self.rew_scales["joint_acc"]
+        # # base height penalty
+        # rew_base_height = torch.square(self.root_states[:, 2] - 0.52) * self.rew_scales["base_height"] # TODO add target base height to cfg  # 0.52
 
-        # collision penalty
-        knee_contact = torch.norm(self.contact_forces[:, self.knee_indices, :], dim=2) > 1.
-        rew_collision = torch.sum(knee_contact, dim=1) * self.rew_scales["collision"] # sum vs any ?
+        # # torque penalty
+        # rew_torque = torch.sum(torch.square(self.torques), dim=1) * self.rew_scales["torque"]
 
-        # stumbling penalty
-        stumble = (torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=2) > 5.) * (torch.abs(self.contact_forces[:, self.feet_indices, 2]) < 1.)
-        rew_stumble = torch.sum(stumble, dim=1) * self.rew_scales["stumble"]
+        # # joint acc penalty
+        # rew_joint_acc = torch.sum(torch.square(self.last_hound_dof_vel - self.hound_dof_vel), dim=1) * self.rew_scales["joint_acc"]
 
-        # action rate penalty
-        rew_action_rate = torch.sum(torch.square(self.last_actions - self.actions), dim=1) * self.rew_scales["action_rate"]
+        # # collision penalty
+        # knee_contact = torch.norm(self.contact_forces[:, self.knee_indices, :], dim=2) > 1.
+        # base_contact = torch.norm(self.contact_forces[:, self.base_indices, :], dim=2) > 1.
+        # rew_collision = torch.sum(knee_contact, dim=1) * self.rew_scales["collision"] + torch.sum(base_contact, dim=1) * self.rew_scales["collision"]# sum vs any ?
 
-        # air time reward
-        # contact = torch.norm(contact_forces[:, feet_indices, :], dim=2) > 1.
-        contact = self.contact_forces[:, self.feet_indices, 2] > 1.
-        first_contact = (self.feet_air_time > 0.) * contact
-        self.feet_air_time += self.dt
-        rew_airTime = torch.sum((self.feet_air_time - 0.5) * first_contact, dim=1) * self.rew_scales["air_time"] # reward only on first contact with the ground
-        rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
-        self.feet_air_time *= ~contact
+        # # stumbling penalty
+        # stumble = (torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=2) > 5.) * (torch.abs(self.contact_forces[:, self.feet_indices, 2]) < 1.)
+        # rew_stumble = torch.sum(stumble, dim=1) * self.rew_scales["stumble"]
 
-        # cosmetic penalty for hip motion
-        rew_hip = torch.sum(torch.abs(self.dof_pos[:, [0, 3, 6, 9]] - self.default_dof_pos[:, [0, 3, 6, 9]]), dim=1)* self.rew_scales["hip"]
+        # # action rate penalty
+        # rew_action_rate = torch.sum(torch.square(self.last_actions - self.actions), dim=1) * self.rew_scales["action_rate"]
 
-        # total reward
-        self.rew_buf = rew_lin_vel_xy + rew_ang_vel_z + rew_lin_vel_z + rew_ang_vel_xy + rew_orient + rew_base_height +\
-                    rew_torque + rew_joint_acc + rew_collision + rew_action_rate + rew_airTime + rew_hip + rew_stumble
-        self.rew_buf = torch.clip(self.rew_buf, min=0., max=None)
+        # # air time reward
+        # # contact = torch.norm(contact_forces[:, feet_indices, :], dim=2) > 1.
+        # contact = self.contact_forces[:, self.feet_indices, 2] > 1.
+        # first_contact = (self.feet_air_time > 0.) * contact
+        # self.feet_air_time += self.dt
+        # rew_airTime = torch.sum((self.feet_air_time - 0.5) * first_contact, dim=1) * self.rew_scales["air_time"] # reward only on first contact with the ground
+        # rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
+        # self.feet_air_time *= ~contact
 
-        # add termination reward
-        self.rew_buf += self.rew_scales["termination"] * self.reset_buf * ~self.timeout_buf
+        # # cosmetic penalty for hip motion
+        # rew_hip = torch.sum(torch.abs(self.hound_dof_pos[:, [0, 3, 6, 9]] - self.hound_default_dof_pos[:, [0, 3, 6, 9]]), dim=1)* self.rew_scales["hip"]
+
+        # # total reward
+        # self.rew_buf = rew_lin_vel_xy + rew_ang_vel_z + rew_lin_vel_z + rew_ang_vel_xy + rew_orient + rew_base_height +\
+        #             rew_torque + rew_joint_acc + rew_collision + rew_action_rate + rew_airTime + rew_hip + rew_stumble
+        # self.rew_buf = torch.clip(self.rew_buf, min=0., max=None)
+
+        # # add termination reward
+        # self.rew_buf += self.rew_scales["termination"] * self.reset_buf * ~self.timeout_buf
 
         # log episode reward sums
-        self.episode_sums["lin_vel_xy"] += rew_lin_vel_xy
-        self.episode_sums["ang_vel_z"] += rew_ang_vel_z
-        self.episode_sums["lin_vel_z"] += rew_lin_vel_z
-        self.episode_sums["ang_vel_xy"] += rew_ang_vel_xy
-        self.episode_sums["orient"] += rew_orient
-        self.episode_sums["torques"] += rew_torque
-        self.episode_sums["joint_acc"] += rew_joint_acc
-        self.episode_sums["collision"] += rew_collision
-        self.episode_sums["stumble"] += rew_stumble
-        self.episode_sums["action_rate"] += rew_action_rate
-        self.episode_sums["air_time"] += rew_airTime
-        self.episode_sums["base_height"] += rew_base_height
-        self.episode_sums["hip"] += rew_hip
+        # self.episode_sums["lin_vel_xy"] += rew_lin_vel_xy
+        # self.episode_sums["ang_vel_z"] += rew_ang_vel_z
+        # self.episode_sums["lin_vel_z"] += rew_lin_vel_z
+        # self.episode_sums["ang_vel_xy"] += rew_ang_vel_xy
+        # self.episode_sums["orient"] += rew_orient
+        # self.episode_sums["torques"] += rew_torque
+        # self.episode_sums["joint_acc"] += rew_joint_acc
+        # self.episode_sums["collision"] += rew_collision
+        # self.episode_sums["stumble"] += rew_stumble
+        # self.episode_sums["action_rate"] += rew_action_rate
+        # self.episode_sums["air_time"] += rew_airTime
+        # self.episode_sums["base_height"] += rew_base_height
+        # self.episode_sums["hip"] += rew_hip
 
     def reset_idx(self, env_ids):
-        positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
-        velocities = torch_rand_float(-0.1, 0.1, (len(env_ids), self.num_dof), device=self.device)
-
-        self.dof_pos[env_ids] = self.default_dof_pos[env_ids] * positions_offset
-        self.dof_vel[env_ids] = velocities
+        
+        positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.hound_num_dof), device=self.device)
+        velocities = torch_rand_float(-0.1, 0.1, (len(env_ids), self.hound_num_dof), device=self.device)
+        self.hound_dof_pos[env_ids] = self.hound_default_dof_pos[env_ids] * positions_offset
+        self.hound_dof_vel[env_ids] = velocities
 
         env_ids_int32 = env_ids.to(dtype=torch.int32)
 
@@ -415,6 +612,29 @@ class HoundTerrain(VecTask):
         else:
             self.root_states[env_ids] = self.base_init_state
 
+        
+
+        
+        ################################################################
+        ## for arm######################################################
+        self.arm_commands_x[env_ids] = torch_rand_float(self.arm_command_x_range[0], self.arm_command_x_range[1], (len(env_ids), 1), device=self.device).squeeze()
+        self.arm_commands_y[env_ids] = torch_rand_float(self.arm_command_y_range[0], self.arm_command_y_range[1], (len(env_ids), 1), device=self.device).squeeze()
+        self.arm_commands_z[env_ids] = torch_rand_float(self.arm_command_z_range[0], self.arm_command_z_range[1], (len(env_ids), 1), device=self.device).squeeze()
+        reset_noise = torch.rand((len(env_ids), 6), device=self.device)
+        pos = tensor_clamp(
+            self.houndarm_default_dof_pos.unsqueeze(0),
+            self.houndarm_dof_lower_limits.unsqueeze(0), self.houndarm_dof_upper_limits) # TODO limit are in urdf
+        self._q[env_ids, :] = pos
+        self._qd[env_ids, :] = torch.zeros_like(self._qd[env_ids])
+        self._pos_control[env_ids, :] = pos
+        self._effort_control[env_ids, :] = torch.zeros_like(pos)
+        ################################################################
+        ################################################################
+        # self.commands[env_ids, 0] = torch_rand_float(self.command_x_range[0], self.command_x_range[1], (len(env_ids), 1), device=self.device).squeeze()
+        # self.commands[env_ids, 1] = torch_rand_float(self.command_y_range[0], self.command_y_range[1], (len(env_ids), 1), device=self.device).squeeze()
+        # self.commands[env_ids, 3] = torch_rand_float(self.command_yaw_range[0], self.command_yaw_range[1], (len(env_ids), 1), device=self.device).squeeze()
+        # self.commands[env_ids] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.25).unsqueeze(1) # set small commands to zero
+
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_states),
                                                      gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
@@ -422,14 +642,22 @@ class HoundTerrain(VecTask):
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self.dof_state),
                                               gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+        
+        # sum hound pos and arm pos & effort
+        total_pos = torch.cat([self.hound_dof_pos, self._pos_control], axis=1) 
+        total_effort = torch.zeros_like(total_pos)
 
-        self.commands[env_ids, 0] = torch_rand_float(self.command_x_range[0], self.command_x_range[1], (len(env_ids), 1), device=self.device).squeeze()
-        self.commands[env_ids, 1] = torch_rand_float(self.command_y_range[0], self.command_y_range[1], (len(env_ids), 1), device=self.device).squeeze()
-        self.commands[env_ids, 3] = torch_rand_float(self.command_yaw_range[0], self.command_yaw_range[1], (len(env_ids), 1), device=self.device).squeeze()
-        self.commands[env_ids] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.25).unsqueeze(1) # set small commands to zero
-
+        self.gym.set_dof_position_target_tensor_indexed(self.sim,
+                                                        gymtorch.unwrap_tensor(total_pos),
+                                                        gymtorch.unwrap_tensor(env_ids_int32),
+                                                        len(env_ids_int32))
+        
+        self.gym.set_dof_actuation_force_tensor_indexed(self.sim,
+                                                        gymtorch.unwrap_tensor(total_effort),
+                                                        gymtorch.unwrap_tensor(env_ids_int32),
+                                                        len(env_ids_int32))
         self.last_actions[env_ids] = 0.
-        self.last_dof_vel[env_ids] = 0.
+        self.last_hound_dof_vel[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
         self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = 1
@@ -454,14 +682,57 @@ class HoundTerrain(VecTask):
     def push_robots(self):
         self.root_states[:, 7:9] = torch_rand_float(-1., 1., (self.num_envs, 2), device=self.device) # lin vel x/y
         self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
+    
+    ######################################################################
+    ## for arm ###########################################################
+    def _compute_osc_torques(self, dpose):
+        # Solve for Operational Space Control # Paper: khatib.stanford.edu/publications/pdfs/Khatib_1987_RA.pdf
+        # Helpful resource: studywolf.wordpress.com/2013/09/17/robot-control-4-operation-space-control/
+        q, qd = self._q[:, :6], self._qd[:, :6]
+        #q, qd = self._q[:, :7], self._qd[:, :7]
+    
+        mm_inv = torch.inverse(self._mm)
+        m_eef_inv = self._j_eef @ mm_inv @ torch.transpose(self._j_eef, 1, 2)
+        m_eef = torch.inverse(m_eef_inv)
+
+        # Transform our cartesian action `dpose` into joint torques `u`
+        u = torch.transpose(self._j_eef, 1, 2) @ m_eef @ (
+                self.arm_kp * dpose - self.arm_kd * (self._eef_state[:,7:] - self._root_state[:,7:])).unsqueeze(-1)
+
+        # Nullspace control torques `u_null` prevents large changes in joint configuration
+        # They are added into the nullspace of OSC so that the end effector orientation remains constant
+        # roboticsproceedings.org/rss07/p31.pdf
+        j_eef_inv = m_eef @ self._j_eef @ mm_inv
+        u_null = self.arm_kd_null * -qd + self.arm_kp_null * ((self.houndarm_default_dof_pos[:6] - q + np.pi) % (2 * np.pi) - np.pi)#((self.houndarm_default_dof_pos[:7] - q + np.pi) % (2 * np.pi) - np.pi)
+        u_null[:, 6:] *= 0
+        # u_null[:, 7:] *= 0
+        u_null = self._mm @ u_null.unsqueeze(-1)
+        u += (torch.eye(6, device=self.device).unsqueeze(0) - torch.transpose(self._j_eef, 1, 2) @ j_eef_inv) @ u_null
+        #u += (torch.eye(7, device=self.device).unsqueeze(0) - torch.transpose(self._j_eef, 1, 2) @ j_eef_inv) @ u_null
+
+        # Clip the values to be within valid effort range
+        u = tensor_clamp(u.squeeze(-1),
+                         -self._houndarm_effort_limits[:6].unsqueeze(0), self._houndarm_effort_limits[:6].unsqueeze(0))
+        # u = tensor_clamp(u.squeeze(-1),
+        #                  -self._houndarm_effort_limits[:7].unsqueeze(0), self._houndarm_effort_limits[:7].unsqueeze(0))
+
+        return u
+    ######################################################################
+    ######################################################################
 
     def pre_physics_step(self, actions):
         self.actions = actions.clone().to(self.device)
+        
+        #pos_arm = self.houndarm_default_dof_pos[:6]
+
         for i in range(self.decimation):
-            torques = torch.clip(self.Kp*(self.action_scale*self.actions + self.default_dof_pos - self.dof_pos) - self.Kd*self.dof_vel,
-                                 -80., 80.)
-            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torques))
-            self.torques = torques.view(self.torques.shape)
+                           
+            pos_arm = torch.zeros(self.num_envs, 6, device=self.device)
+            pos_arm[:,:6]=self.houndarm_default_dof_pos[:6]
+            position_input = torch.cat([self.hound_default_dof_pos,pos_arm], axis=1) 
+            self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(position_input))
+            # self.torques = torques[:,0:12] # FIX
+            # self.torques = torques.view(self.torques.shape)
             self.gym.simulate(self.sim)
             if self.device == 'cpu':
                 self.gym.fetch_results(self.sim, True)
@@ -469,23 +740,26 @@ class HoundTerrain(VecTask):
 
     def post_physics_step(self):
         # self.gym.refresh_dof_state_tensor(self.sim) # done in step
+        
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
-
+        self.gym.refresh_jacobian_tensors(self.sim)
+        self.gym.refresh_mass_matrix_tensors(self.sim)
+        self.gym.refresh_dof_force_tensor(self.sim)
         self.progress_buf += 1
         self.randomize_buf += 1
-        self.common_step_counter += 1
-        if self.common_step_counter % self.push_interval == 0:
-            self.push_robots()
+        # self.common_step_counter += 1
+        # if self.common_step_counter % self.push_interval == 0:
+        #     self.push_robots()
 
         # prepare quantities
         self.base_quat = self.root_states[:, 3:7]
-        self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
-        self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
-        self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
-        forward = quat_apply(self.base_quat, self.forward_vec)
-        heading = torch.atan2(forward[:, 1], forward[:, 0])
-        self.commands[:, 2] = torch.clip(0.5*wrap_to_pi(self.commands[:, 3] - heading), -1., 1.)
+        # self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
+        # self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
+        # self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+        # forward = quat_apply(self.base_quat, self.forward_vec)
+        # heading = torch.atan2(forward[:, 1], forward[:, 0])
+        # self.commands[:, 2] = torch.clip(0.5*wrap_to_pi(self.commands[:, 3] - heading), -1., 1.)
 
         # compute observations, rewards, resets, ...
         self.check_termination()
@@ -495,12 +769,11 @@ class HoundTerrain(VecTask):
             self.reset_idx(env_ids)
 
         self.compute_observations()
+        # if self.add_noise:
+        #     self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
         
-        if self.add_noise:
-            self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
-
-        self.last_actions[:] = self.actions[:]
-        self.last_dof_vel[:] = self.dof_vel[:]
+        # self.last_actions[:] = self.actions[:]
+        # self.last_hound_dof_vel[:] = self.hound_dof_vel[:]
 
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             # draw height lines

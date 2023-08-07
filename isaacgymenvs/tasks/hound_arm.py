@@ -213,7 +213,7 @@ class Houndarm(VecTask):
 
         asset_options.fix_base_link = True
         asset_options.collapse_fixed_joints = False
-        asset_options.disable_gravity = True
+        asset_options.disable_gravity = False
         asset_options.thickness = 0.001
         asset_options.default_dof_drive_mode = gymapi.DOF_MODE_EFFORT
         asset_options.use_mesh_materials = True
@@ -320,6 +320,8 @@ class Houndarm(VecTask):
         print(jacobian.size())
         
         self._j_eef = jacobian[:, hand_joint_index, :, :6]
+        print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        print(self._j_eef[0,:])
         # self._j_eef = jacobian[:, hand_joint_index, :, :7]
         _massmatrix = self.gym.acquire_mass_matrix_tensor(self.sim, "houndarm")
         mm = gymtorch.wrap_tensor(_massmatrix)
@@ -467,6 +469,8 @@ class Houndarm(VecTask):
         
         mm_inv = torch.inverse(self._mm)
         m_eef_inv = self._j_eef @ mm_inv @ torch.transpose(self._j_eef, 1, 2)
+        print("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        print(self._j_eef[0,:])
         m_eef = torch.inverse(m_eef_inv)
 
         # Transform our cartesian action `dpose` into joint torques `u`
