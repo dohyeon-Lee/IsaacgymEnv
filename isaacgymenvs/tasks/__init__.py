@@ -27,6 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from .hound import Hound
+from .Hound_terrain import HoundTerrain
 from .manipulator import Manipulator
 from .hound_arm import Houndarm
 from .useful_hound import UsefulHound
@@ -88,6 +89,7 @@ def resolve_allegro_kuka_two_arms(cfg, *args, **kwargs):
 # Mappings from strings to environments
 isaacgym_task_map = {
     "UsefulHound": UsefulHound,
+    "HoundTerrain": HoundTerrain,
     "Hound": Hound,
     "Houndarm": Houndarm,
     "Manipulator": Manipulator,
