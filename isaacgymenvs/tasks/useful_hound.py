@@ -455,11 +455,9 @@ class UsefulHound(VecTask):
         
         _jacobian = self.gym.acquire_jacobian_tensor(self.sim, "UsefulHound")
         jacobian = gymtorch.wrap_tensor(_jacobian)
-        #print(jacobian[0,:])
         hand_joint_index = self.gym.get_actor_joint_dict(self.envs[0], self.anymal_handles[0])['joint6']
-        print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-        self._j_eef = jacobian[:, hand_joint_index, :, :6]
-        print(self._j_eef[0,:])
+        print(jacobian.size()) # torch.Size([4096, 23, 6, 18])
+        self._j_eef = jacobian[:, hand_joint_index, :, -6:]
         _massmatrix = self.gym.acquire_mass_matrix_tensor(self.sim, "UsefulHound")
         mm = gymtorch.wrap_tensor(_massmatrix)
         
@@ -479,8 +477,13 @@ class UsefulHound(VecTask):
         self.reset_buf = torch.norm(self.contact_forces[:, self.base_index, :], dim=1) > 1.
         self.reset_buf = self.reset_buf | torch.any(torch.norm(self.contact_forces[:, self.knee_indices, :], dim=2) > 1., dim=1)
         self.reset_buf = self.reset_buf | torch.any(torch.norm(self.contact_forces[:, self.base_indices, :], dim=2) > 1., dim=1)
+        #self.reset_buf = self.reset_buf | torch.any(self.contact_forces[:, self.feet_indices, 2] < 1., dim=1)
+
         # self.reset_buf = self.reset_buf | torch.any(torch.norm(self.contact_forces[:, self.calf_indices, :], dim=2) > 1., dim=1)
         time_out = self.progress_buf >= self.max_episode_length - 1  # no terminal reward for time-outs
+        #contact = torch.norm(contact_forces[:, feet_indices, :], dim=2) > 1.
+        # contact = self.contact_forces[:, self.feet_indices, 2] > 1.
+
         self.reset_buf = self.reset_buf | time_out
 
         # self.reset_buf = torch.norm(self.contact_forces[:, self.base_index, :], dim=1) > 1.
@@ -506,28 +509,24 @@ class UsefulHound(VecTask):
         #                             self._eef_state[:, 3:7],
         #                             self.arm_commands[:,:]
         #                             ), dim=-1)
-        self.obs_buf = torch.cat((  self._relative_eef_state[:, :3],  # eef_pos
+        self.obs_buf = torch.cat((  self._eef_state[:, :3],  # eef_pos
                                     self._eef_state[:, 3:7], # eef_quat
                                     self.arm_commands[:,:]   # commands
                                     ), dim=-1)
 
     def compute_reward(self):
 
-        # print(self._root_state[0, :3])
-        # print(self._eef_state[0,:3])
         self._relative_eef_state = self._eef_state - self._root_state
-        # print(self._relative_eef_state[0,:3])
-        # print(self.arm_commands[0,:])
-        # print("ggggggggggggggggggggggggggggggggggggggggggg")
-        distance_rewards = 1 - torch.tanh(10.0 * (torch.norm(self._relative_eef_state[:, :3] - self.arm_commands[:,:], dim=-1)))  #1 / (1 + torch.norm(states["eef_pos"] - states["commands"], dim=-1))
+        # print("sssssssssssssssssssssssssssssssssssssssssssssssssssss")
+        # print(self._eef_state[0,:3])
+
+        distance_rewards = 1 - torch.tanh(10.0 * (torch.norm(self._eef_state[:, :3] - self.arm_commands[:,:], dim=-1)))  #1 / (1 + torch.norm(states["eef_pos"] - states["commands"], dim=-1))
         velocity_rewards = 0
         
-        distance_in_reach = (torch.norm(self._relative_eef_state[:, :3] - self.arm_commands[:,:], dim=-1) < 0.02)
-        velocity_rewards = 1 - torch.tanh(10.0 * torch.norm(self._relative_eef_state[:, 7:], dim=-1))
+        distance_in_reach = (torch.norm(self._eef_state[:, :3] - self.arm_commands[:,:], dim=-1) < 0.02)
+        velocity_rewards = 1 - torch.tanh(10.0 * torch.norm(self._eef_state[:, 7:], dim=-1))
         rewards = distance_rewards * self.arm_reward_settings["r_dist_scale"] + velocity_rewards * distance_in_reach * self.arm_reward_settings["r_vel_scale"]
         rewards = torch.clip(rewards, 0., None)
-
-        self.rew_buf = rewards
         # # velocity tracking reward
         # lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
         # ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
@@ -535,9 +534,10 @@ class UsefulHound(VecTask):
         # rew_ang_vel_z = torch.exp(-ang_vel_error/0.25) * self.rew_scales["ang_vel_z"]
 
         # # other base velocity penalties
-        # rew_lin_vel_z = torch.square(self.base_lin_vel[:, 2]) * self.rew_scales["lin_vel_z"]
-        # rew_ang_vel_xy = torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1) * self.rew_scales["ang_vel_xy"]
-
+        rew_lin_vel = torch.sum(torch.square(self.base_lin_vel[:, :3]), dim=1) * -4 #self.rew_scales["lin_vel_z"]
+        rew_ang_vel = torch.sum(torch.square(self.base_ang_vel[:, :3]), dim=1) * -4 #self.rew_scales["ang_vel_xy"]
+        self.rew_buf = rewards + rew_lin_vel + rew_ang_vel
+        
         # # orientation penalty
         # rew_orient = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1) * self.rew_scales["orient"]
 
@@ -696,8 +696,6 @@ class UsefulHound(VecTask):
     
         mm_inv = torch.inverse(self._mm)
         m_eef_inv = self._j_eef @ mm_inv @ torch.transpose(self._j_eef, 1, 2)
-        print("sssssssssssssssssssssssssssssssssss")
-        print(self._j_eef[0,:])
         m_eef = torch.inverse(m_eef_inv)
 
         # Transform our cartesian action `dpose` into joint torques `u`
@@ -773,9 +771,9 @@ class UsefulHound(VecTask):
 
         # prepare quantities
         self.base_quat = self.root_states[:, 3:7]
-        # self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
-        # self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
-        # self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+        self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
+        self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
+        self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         # forward = quat_apply(self.base_quat, self.forward_vec)
         # heading = torch.atan2(forward[:, 1], forward[:, 0])
         # self.commands[:, 2] = torch.clip(0.5*wrap_to_pi(self.commands[:, 3] - heading), -1., 1.)

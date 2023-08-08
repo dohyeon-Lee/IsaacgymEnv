@@ -317,7 +317,7 @@ class Houndarm(VecTask):
         jacobian = gymtorch.wrap_tensor(_jacobian)
 
         hand_joint_index = self.gym.get_actor_joint_dict(env_ptr, houndarm_handle)['joint6']
-        print(jacobian.size())
+        print(jacobian.size()) # torch.Size([8192, 6, 6, 6])
         
         self._j_eef = jacobian[:, hand_joint_index, :, :6]
         print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

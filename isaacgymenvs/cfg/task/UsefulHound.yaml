@@ -35,7 +35,7 @@ env:
     slopeTreshold: 0.5
 
   baseInitState:
-    pos: [0.0, 0.0, 0.63] # x,y,z [m]
+    pos: [0.0, 0.0, 0.52] # x,y,z [m]
     rot: [0.0, 0.0, 0.0, 1.0] # x,y,z,w [quat]
     vLinear: [0.0, 0.0, 0.0]  # x,y,z [m/s]
     vAngular: [0.0, 0.0, 0.0]  # x,y,z [rad/s]
@@ -50,7 +50,7 @@ env:
   randomArmCommandPositionRanges:
     x: [0.4, 0.70] 
     y: [-0.3, 0.3] 
-    z: [0.2, 0.5]    
+    z: [0.7, 1.02]    
 
   control:
     # PD Drive parameters:
@@ -147,7 +147,7 @@ env:
     pushInterval_s: 15
 
     # episode length in seconds
-    episodeLength_s: 4 #20
+    episodeLength_s: 20 #20
 
   # viewer cam:
   viewer:
