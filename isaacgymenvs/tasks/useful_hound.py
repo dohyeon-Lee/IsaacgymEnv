@@ -321,7 +321,7 @@ class UsefulHound(VecTask):
         asset_options.collapse_fixed_joints = self.cfg["env"]["urdfAsset"]["collapseFixedJoints"] # false
         asset_options.replace_cylinder_with_capsule = False
         asset_options.flip_visual_attachments = False
-        asset_options.fix_base_link = True #self.cfg["env"]["urdfAsset"]["fixBaseLink"]
+        asset_options.fix_base_link = self.cfg["env"]["urdfAsset"]["fixBaseLink"]
         asset_options.density = 0.001
         asset_options.angular_damping = 0.0
         asset_options.linear_damping = 0.0
