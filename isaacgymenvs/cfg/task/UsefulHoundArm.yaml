@@ -1,15 +1,15 @@
 # used to create the object
-name: UsefulHound
+name: UsefulHoundArm
 
 physics_engine: 'physx'
 
 env:
   numEnvs: ${resolve_default:4096,${...num_envs}}
-  numObservations: 55 # 19 #55 #10 #73 #61 # 204 #(Hound pos)3 + (Hound vel)3 + (Hound ori)3 + (Hound command)3 + (Hound lastact)18 + (Hound dof pos)12 + (Hound dof vel)12 + (groundvis)140 + (manipulator)3+4+3
-  numActions: 18 # (Hound)12 + (manipulator)6
+  numObservations: 19 #10 #73 #61 # 204 #(Hound pos)3 + (Hound vel)3 + (Hound ori)3 + (Hound command)3 + (Hound lastact)18 + (Hound dof pos)12 + (Hound dof vel)12 + (groundvis)140 + (manipulator)3+4+3
+  numActions: 6 # (Hound)12 + (manipulator)6
   envSpacing: 3.  # [m]
   enableDebugVis: False
-
+  test: false
   ############################
   ## for manipulator #########
   houndarmPositionNoise: 0.0
@@ -57,7 +57,8 @@ env:
     y: [-0.3, 0.3] 
     z: [0.65, 0.85] 
 
-    sph_l: [0.20, 0.510]
+    sph_l: [0.150, 0.510]
+    # sph_l: [0.20, 0.515]
     sph_p: [0.349, 1.134]
     sph_y: [-1.05, 1.05]
     sph_T: [1, 3]
@@ -99,7 +100,7 @@ env:
     calfName: "calf"
     endpointName: "end_link"
     collapseFixedJoints: false
-    fixBaseLink: true
+    fixBaseLink: false
     defaultDofDriveMode: 4 # see GymDofDriveModeFlags (0 is none, 1 is pos tgt, 2 is vel tgt, 4 effort)
 
   learn:
@@ -113,7 +114,7 @@ env:
 
     orientationRewardScale: -100 # -5 #-1. #-1.
     torqueRewardScale: -0.000025 # -0.000025
-    jointAccRewardScale: -0.0025 # -0.0025
+    jointAccRewardScale: -0.0025 #-0.0025 # -0.0025
     armjointAccRewardScale: -0.025
     baseHeightRewardScale: -4 #-5.0 #5
 

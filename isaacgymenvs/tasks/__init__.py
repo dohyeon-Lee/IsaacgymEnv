@@ -27,6 +27,10 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from .hound import Hound
+from .useful_hound_prior import UsefulHoundPrior
+from .useful_hound_imitate import UsefulHoundImitate
+from .useful_hound_armfix import UsefulHoundArmFix
+from .useful_hound_arm import UsefulHoundArm
 from .hound_test import HoundTest
 from .Hound_terrain import HoundTerrain
 from .manipulator import Manipulator
@@ -89,6 +93,10 @@ def resolve_allegro_kuka_two_arms(cfg, *args, **kwargs):
 
 # Mappings from strings to environments
 isaacgym_task_map = {
+    "UsefulHoundPrior" : UsefulHoundPrior,
+    "UsefulHoundImitate": UsefulHoundImitate,
+    "UsefulHoundArmFix": UsefulHoundArmFix,
+    "UsefulHoundArm": UsefulHoundArm,
     "HoundTest": HoundTest,
     "UsefulHound": UsefulHound,
     "HoundTerrain": HoundTerrain,

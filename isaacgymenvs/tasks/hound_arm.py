@@ -469,8 +469,6 @@ class Houndarm(VecTask):
         
         mm_inv = torch.inverse(self._mm)
         m_eef_inv = self._j_eef @ mm_inv @ torch.transpose(self._j_eef, 1, 2)
-        print("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-        print(self._j_eef[0,:])
         m_eef = torch.inverse(m_eef_inv)
 
         # Transform our cartesian action `dpose` into joint torques `u`
@@ -557,7 +555,7 @@ def compute_houndarm_reward(
 ):
     # type: (Tensor, Tensor, Tensor, Dict[str, Tensor], Dict[str, float], float) -> Tuple[Tensor, Tensor]
 
-    distance_rewards = 1 - torch.tanh(10.0 * (torch.norm(states["eef_pos"] - states["commands"], dim=-1)))  #1 / (1 + torch.norm(states["eef_pos"] - states["commands"], dim=-1))
+    distance_rewards = torch.exp(-7*torch.norm(states["eef_pos"] - states["commands"], dim=-1)) #1 - torch.tanh(10.0 * (torch.norm(states["eef_pos"] - states["commands"], dim=-1)))  #1 / (1 + torch.norm(states["eef_pos"] - states["commands"], dim=-1))
     velocity_rewards = 0
     
     

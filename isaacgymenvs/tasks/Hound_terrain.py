@@ -220,7 +220,7 @@ class HoundTerrain(VecTask):
         asset_options.collapse_fixed_joints = self.cfg["env"]["urdfAsset"]["collapseFixedJoints"]
         asset_options.replace_cylinder_with_capsule = False
         asset_options.flip_visual_attachments = False
-        asset_options.fix_base_link = self.cfg["env"]["urdfAsset"]["fixBaseLink"]
+        asset_options.fix_base_link = True#self.cfg["env"]["urdfAsset"]["fixBaseLink"]
         asset_options.density = 0.001
         asset_options.angular_damping = 0.0
         asset_options.linear_damping = 0.0
@@ -241,7 +241,7 @@ class HoundTerrain(VecTask):
         self.base_init_state = to_torch(self.base_init_state, device=self.device, requires_grad=False)
         start_pose = gymapi.Transform()
         start_pose.p = gymapi.Vec3(*self.base_init_state[:3])
-
+        start_pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
         body_names = self.gym.get_asset_rigid_body_names(anymal_asset)
         self.dof_names = self.gym.get_asset_dof_names(anymal_asset)
         foot_name = self.cfg["env"]["urdfAsset"]["footName"]
@@ -322,18 +322,18 @@ class HoundTerrain(VecTask):
         self.obs_buf = torch.cat((  self.base_lin_vel * self.lin_vel_scale,
                                     self.base_ang_vel  * self.ang_vel_scale,
                                     self.projected_gravity,
-                                    self.commands[:, :3] * self.commands_scale,
                                     self.dof_pos * self.dof_pos_scale,
                                     self.dof_vel * self.dof_vel_scale,
-                                    self.actions
+                                    self.actions,
+                                    self.commands[:, :3] * self.commands_scale,
                                     ), dim=-1)
 
     def compute_reward(self):
         # velocity tracking reward TODO similer with paper
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
+        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2]) # yaw error
         rew_lin_vel_xy = torch.exp(-lin_vel_error/0.25) * self.rew_scales["lin_vel_xy"]
-        rew_ang_vel_z = torch.exp(-ang_vel_error/0.25) * self.rew_scales["ang_vel_z"]
+        rew_ang_vel_z = torch.exp(-ang_vel_error/0.25) * self.rew_scales["ang_vel_z"] # yaw error
 
         # other base velocity penalties
         rew_lin_vel_z = torch.square(self.base_lin_vel[:, 2]) * self.rew_scales["lin_vel_z"]
@@ -351,6 +351,9 @@ class HoundTerrain(VecTask):
         # joint acc penalty
         rew_joint_acc = torch.sum(torch.square(self.last_dof_vel - self.dof_vel), dim=1) * self.rew_scales["joint_acc"]
 
+        # joint speed penalty
+        rew_joint_vel = torch.sum(torch.square(self.dof_vel), dim=1) * self.rew_scales["joint_vel"]
+        
         # collision penalty
         knee_contact = torch.norm(self.contact_forces[:, self.knee_indices, :], dim=2) > 1.
         rew_collision = torch.sum(knee_contact, dim=1) * self.rew_scales["collision"] # sum vs any ?
@@ -376,13 +379,15 @@ class HoundTerrain(VecTask):
 
         # total reward
         self.rew_buf = rew_lin_vel_xy + rew_ang_vel_z + rew_lin_vel_z + rew_ang_vel_xy + rew_orient + rew_base_height +\
-                    rew_torque + rew_joint_acc + rew_collision + rew_action_rate + rew_airTime + rew_hip + rew_stumble
+                    rew_torque + rew_joint_acc + rew_collision + rew_action_rate + rew_airTime + rew_hip + rew_stumble + rew_joint_vel
         self.rew_buf = torch.clip(self.rew_buf, min=0., max=None)
 
         # add termination reward
         self.rew_buf += self.rew_scales["termination"] * self.reset_buf * ~self.timeout_buf
 
         # log episode reward sums
+        self.episode_sums["joint_vel"] += rew_joint_vel
+
         self.episode_sums["lin_vel_xy"] += rew_lin_vel_xy
         self.episode_sums["ang_vel_z"] += rew_ang_vel_z
         self.episode_sums["lin_vel_z"] += rew_lin_vel_z
@@ -481,7 +486,10 @@ class HoundTerrain(VecTask):
         self.base_quat = self.root_states[:, 3:7]
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
+        # print("ddddddddddddddddddddddddddddddddddddddddddddddddddd")
+        # print(self.gravity_vec[0,:])
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+        # print(self.projected_gravity[0,:])
         forward = quat_apply(self.base_quat, self.forward_vec)
         heading = torch.atan2(forward[:, 1], forward[:, 0])
         self.commands[:, 2] = torch.clip(0.5*wrap_to_pi(self.commands[:, 3] - heading), -1., 1.)

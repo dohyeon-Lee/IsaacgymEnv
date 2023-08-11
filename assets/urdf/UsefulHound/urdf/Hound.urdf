@@ -495,7 +495,8 @@
 
 <!-- arm link -->
   <joint name="fixed" type="fixed">
-    <origin xyz="0.15 0 0.05" rpy="0 0 0"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <!-- <origin xyz="0.15 0 0.05" rpy="0 0 0"/> -->
     <parent link="trunk"/>
     <child link="link1"/>
   </joint>
@@ -713,7 +714,8 @@
     <child link="end_link"/>
     <origin xyz="0.12300 -0.04500 0.00000" rpy="0 0 0"/>
     <axis xyz="1 0 0"/>
-    <limit velocity="6.5" effort="1000" lower="-1.57" upper="1.57" />
+    <limit velocity="6.5" effort="1000" lower="-1.57" upper="1.57" /> 
+    <!-- velocity : 6.5 -->
     <dynamics damping="0.7"/>
   </joint>
 

@@ -81,7 +81,7 @@ def spherical_to_cartesian(r, theta, phi):
     y = r * torch.sin(theta) * torch.sin(phi)
     z = r * torch.cos(theta)
     return x, y, z
-class UsefulHound(VecTask):
+class UsefulHoundImitate(VecTask):
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render):
 
@@ -604,7 +604,7 @@ class UsefulHound(VecTask):
         rew_base_height = torch.square(self.root_states[:, 2] - 0.52) * self.rew_scales["base_height"] # TODO add target base height to cfg  # 0.52
 
         # torque penalty
-        rew_torque = torch.sum(torch.square(self.torques[:,12:]), dim=1) * self.rew_scales["torque"]
+        rew_torque = torch.sum(torch.square(self.torques), dim=1) * self.rew_scales["torque"]
 
         # joint vel penalty
         rew_arm_dof_vel = torch.sum(torch.square(self.arm_dof_vel), dim=1) * self.rew_scales["arm_dof_vel"]
@@ -613,6 +613,7 @@ class UsefulHound(VecTask):
         # joint acc penalty
         rew_joint_acc = torch.sum(torch.square(self.last_hound_dof_vel - self.hound_dof_vel), dim=1) * self.rew_scales["joint_acc"]
         rew_arm_joint_acc = torch.sum(torch.square(self.last_arm_dof_vel - self.arm_dof_vel), dim=1) * self.rew_scales["arm_joint_acc"]
+
         # collision penalty
         # knee_contact = torch.norm(self.contact_forces[:, self.knee_indices, :], dim=2) > 1.
         # base_contact = torch.norm(self.contact_forces[:, self.base_indices, :], dim=2) > 1.
@@ -623,7 +624,7 @@ class UsefulHound(VecTask):
         rew_stumble = torch.sum(stumble, dim=1) * self.rew_scales["stumble"]
 
         # action rate penalty
-        rew_action_rate = torch.sum(torch.square(self.last_actions[:,:12] - self.actions[:,:12]), dim=1) * self.rew_scales["action_rate"]
+        rew_action_rate = torch.sum(torch.square(self.last_actions - self.actions), dim=1) * self.rew_scales["action_rate"]
 
         # default dof imitation reward
         rew_imitate = torch.exp(-5*torch.sum(torch.square(self.hound_dof_pos - self.hound_default_dof_pos), dim=1)) * 0.2
@@ -649,7 +650,7 @@ class UsefulHound(VecTask):
 
         # # add termination reward
         # self.rew_buf += self.rew_scales["termination"] * self.reset_buf * ~self.timeout_buf
-        self.rew_buf = arm_rewards + rew_arm_joint_acc + rew_arm_dof_vel + rew_torque #+ rew_hound_dof_vel + rew_lin_vel + rew_ang_vel + rew_orient + rew_basepos + rew_base_height + rew_joint_acc + rew_stumble + rew_action_rate + rew_imitate
+        self.rew_buf = arm_rewards + rew_arm_joint_acc + rew_arm_dof_vel + rew_torque + rew_hound_dof_vel + rew_lin_vel + rew_ang_vel + rew_orient + rew_basepos + rew_base_height + rew_joint_acc + rew_stumble + rew_action_rate + rew_imitate
         self.rew_buf = torch.clip(self.rew_buf, min=0., max=None)
         # log episode reward sums
         # self.episode_sums["lin_vel_xy"] += rew_lin_vel_xy
@@ -839,7 +840,7 @@ class UsefulHound(VecTask):
             ######################################################################
             ## for arm ###########################################################
             torques_arm = u_arm #torch.zeros(self.num_envs,6, device=self.device) 
-            torques = torch.cat([torque_leg, torques_arm], axis=1) 
+            torques = torch.cat([torques, torques_arm], axis=1) 
             ######################################################################
             ######################################################################
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torques))                    

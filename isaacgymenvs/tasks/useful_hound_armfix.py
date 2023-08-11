@@ -81,7 +81,7 @@ def spherical_to_cartesian(r, theta, phi):
     y = r * torch.sin(theta) * torch.sin(phi)
     z = r * torch.cos(theta)
     return x, y, z
-class UsefulHound(VecTask):
+class UsefulHoundArmFix(VecTask):
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render):
 
@@ -118,7 +118,7 @@ class UsefulHound(VecTask):
         self.sph_command_x_range = self.cfg["env"]["randomArmCommandPositionRanges"]["sph_l"]
         self.sph_command_y_range = self.cfg["env"]["randomArmCommandPositionRanges"]["sph_p"]
         self.sph_command_z_range = self.cfg["env"]["randomArmCommandPositionRanges"]["sph_y"]
-        self.sph_command_T_range = self.cfg["env"]["randomArmCommandPositionRanges"]["sph_T"]
+
         # Tensor placeholders
         self._root_state = None             # State of root body        (n_envs, 13)
         self._dof_state = None  # State of all joints       (n_envs, n_dof)
@@ -227,8 +227,6 @@ class UsefulHound(VecTask):
         self.commands = torch.zeros(self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False) # x vel, y vel, yaw vel, heading
         self.commands_scale = torch.tensor([self.lin_vel_scale, self.lin_vel_scale, self.ang_vel_scale], device=self.device, requires_grad=False,)
         self.relative_commands_pos = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False) 
-        self.commands_sph = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
-        
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
         self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
@@ -239,8 +237,6 @@ class UsefulHound(VecTask):
         self.last_arm_dof_vel = torch.zeros_like(self.arm_dof_vel)
         self.height_points = self.init_height_points()
         self.measured_heights = None
-        self.relative_eef_sph = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False) 
-
         # joint positions offsets
         self.hound_default_dof_pos = torch.zeros_like(self.hound_dof_pos, dtype=torch.float, device=self.device, requires_grad=False)
         for i in range(12):
@@ -274,7 +270,10 @@ class UsefulHound(VecTask):
 
         # TODO add command
         self.arm_commands = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
-        self.spherical_commands = torch.zeros(self.num_envs, 5, dtype=torch.float, device=self.device, requires_grad=False)
+        self.spherical_commands = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
+        self.arm_commands_x = self.arm_commands.view(self.num_envs, 3)[..., 0]
+        self.arm_commands_y = self.arm_commands.view(self.num_envs, 3)[..., 1]
+        self.arm_commands_z = self.arm_commands.view(self.num_envs, 3)[..., 2]
         self.state_arm_commands = torch.zeros_like(self.arm_commands)
         ###########################################################################
         ###########################################################################
@@ -342,7 +341,7 @@ class UsefulHound(VecTask):
         asset_file = os.path.basename(asset_path)
 
         asset_options = gymapi.AssetOptions()
-        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_EFFORT
+        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_POS
         asset_options.collapse_fixed_joints = self.cfg["env"]["urdfAsset"]["collapseFixedJoints"] # false
         asset_options.replace_cylinder_with_capsule = False
         asset_options.flip_visual_attachments = False
@@ -416,9 +415,9 @@ class UsefulHound(VecTask):
             self.houndarm_dof_lower_limits.append(dof_props['lower'][i])
             self.houndarm_dof_upper_limits.append(dof_props['upper'][i])
             self._houndarm_effort_limits.append(dof_props['effort'][i])
-        # for i in range(self.hound_num_dof):
-        #     dof_props['stiffness'][i] = 5* 10**20 #7000.0
-        #     dof_props['damping'][i] = 500.0
+        for i in range(self.hound_num_dof):
+            dof_props['stiffness'][i] = 800#5*10**20 #7000.0
+            dof_props['damping'][i] = 20#500.0
         self.houndarm_dof_lower_limits = to_torch(self.houndarm_dof_lower_limits, device=self.device)
         self.houndarm_dof_upper_limits = to_torch(self.houndarm_dof_upper_limits, device=self.device)
         self._houndarm_effort_limits = to_torch(self._houndarm_effort_limits, device=self.device)
@@ -442,16 +441,16 @@ class UsefulHound(VecTask):
         for i in range(self.num_envs):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, num_per_row) # num_per_row : sqrt(num_envs)
-            if self.custom_origins: # TODO if plane: false
-                self.env_origins[i] = self.terrain_origins[self.terrain_levels[i], self.terrain_types[i]]
-                pos = self.env_origins[i].clone()
-                pos[:2] += torch_rand_float(-1., 1., (2, 1), device=self.device).squeeze(1)
-                start_pose.p = gymapi.Vec3(*pos)
+            # if self.custom_origins: # TODO if plane: false
+            #     self.env_origins[i] = self.terrain_origins[self.terrain_levels[i], self.terrain_types[i]]
+            #     pos = self.env_origins[i].clone()
+            #     pos[:2] += torch_rand_float(-1., 1., (2, 1), device=self.device).squeeze(1)
+            #     start_pose.p = gymapi.Vec3(*pos)
 
             for s in range(len(rigid_shape_prop)):
                 rigid_shape_prop[s].friction = friction_buckets[i % num_buckets] # TODO give friction randomly
             self.gym.set_asset_rigid_shape_properties(anymal_asset, rigid_shape_prop) 
-            anymal_handle = self.gym.create_actor(env_handle, anymal_asset, start_pose, "UsefulHound", i, 0, 0)
+            anymal_handle = self.gym.create_actor(env_handle, anymal_asset, start_pose, "UsefulHoundArm", i, 0, 0)
             self.gym.set_actor_dof_properties(env_handle, anymal_handle, dof_props)
             self.envs.append(env_handle)
             self.anymal_handles.append(anymal_handle)
@@ -491,16 +490,19 @@ class UsefulHound(VecTask):
         self.relative_eef_quat = quat_mul(self.base_quat, quat_conjugate(self._eef_state[:,3:7]))
         self.relative_eef_pos = quat_rotate_inverse(self.base_quat, self._eef_state[:,:3] - self._root_state[:,:3])
 
-        _jacobian = self.gym.acquire_jacobian_tensor(self.sim, "UsefulHound")
+        _jacobian = self.gym.acquire_jacobian_tensor(self.sim, "UsefulHoundArm")
         jacobian = gymtorch.wrap_tensor(_jacobian)
         hand_joint_index = self.gym.get_actor_joint_dict(self.envs[0], self.anymal_handles[0])['joint6']
         print("jacobian_size: {}".format(jacobian.size())) # torch.Size([4096, 23, 6, 18])
         
         if(self.cfg["env"]["urdfAsset"]["fixBaseLink"] == True): 
             self._j_eef = jacobian[:, hand_joint_index, :, -6:]
+            print("jacobian size: {}".format(self._j_eef.size()))
         else:          
             self._j_eef = jacobian[:, hand_joint_index, :, 18:24]
-        _massmatrix = self.gym.acquire_mass_matrix_tensor(self.sim, "UsefulHound")
+            print("jacobian size: {}".format(self._j_eef.size()))
+
+        _massmatrix = self.gym.acquire_mass_matrix_tensor(self.sim, "UsefulHoundArm")
         mm = gymtorch.wrap_tensor(_massmatrix)
         # print("massmatrix size: {}".format(mm.size()))
         self._mm = mm[:, -6:, -6:]
@@ -545,16 +547,20 @@ class UsefulHound(VecTask):
     def compute_observations(self):
         # self.measured_heights = self.get_heights()
         # heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.height_meas_scale
+        x,y,z = spherical_to_cartesian(self.spherical_commands[:,0], self.spherical_commands[:,1], self.spherical_commands[:,2])
+        self.relative_commands_pos[:,0] = x
+        self.relative_commands_pos[:,1] = y
+        self.relative_commands_pos[:,2] = z
         # self.relative_commands_pos = quat_rotate_inverse(self.base_quat, self.arm_commands[:, :3] - self._root_state[:, :3])
         self.obs_buf = torch.cat((  
-                                    self.base_lin_vel * self.lin_vel_scale, #3
-                                    self.base_ang_vel  * self.ang_vel_scale, #3
-                                    self.projected_gravity, # 3
-                                    # self.dof_pos * self.dof_pos_scale, # 18
-                                    # self.dof_vel * self.dof_vel_scale, # 18
-                                    self.hound_dof_pos * self.dof_pos_scale, # 12
-                                    self.hound_dof_vel * self.dof_vel_scale, # 12
-                                    self.actions[:,:12], # 12
+                                    # self.base_lin_vel * self.lin_vel_scale, #3
+                                    # self.base_ang_vel  * self.ang_vel_scale, #3
+                                    # self.projected_gravity, # 3
+                                    # # self.dof_pos * self.dof_pos_scale, # 18
+                                    # # self.dof_vel * self.dof_vel_scale, # 18
+                                    # self.hound_dof_pos * self.dof_pos_scale, # 12
+                                    # self.hound_dof_vel * self.dof_vel_scale, # 12
+                                    # self.actions[:,:12], # 12
 
                                     self.relative_eef_pos, # 3
                                     self.relative_eef_quat, # 4
@@ -566,12 +572,8 @@ class UsefulHound(VecTask):
         #                             ), dim=-1)
 
     def compute_reward(self):
-        self.relative_eef_sph[:,0], self.relative_eef_sph[:,1], self.relative_eef_sph[:,2] = spherical_to_cartesian(self.relative_eef_pos[:,0], self.relative_eef_pos[:,1], self.relative_eef_pos[:,2])
-        self.commands_sph[:,0] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,0] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,0]
-        self.commands_sph[:,1] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,1] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,1]
-        self.commands_sph[:,2] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,2] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,2]        
-        x,y,z = spherical_to_cartesian(self.commands_sph[:,0], self.commands_sph[:,1], self.commands_sph[:,2])
-        self.spherical_commands[:,4] += self.dt
+        x,y,z = spherical_to_cartesian(self.spherical_commands[:,0], self.spherical_commands[:,1], self.spherical_commands[:,2])
+        # print("xyz: {}, {}, {}".format(x[0],y[0],z[0]))
         self.relative_commands_pos[:,0] = x
         self.relative_commands_pos[:,1] = y
         self.relative_commands_pos[:,2] = z
@@ -582,7 +584,7 @@ class UsefulHound(VecTask):
         # print("relative_commands_pos: {}".format(self.relative_commands_pos[0,:]))
         # print("     relative_eef_pos: {}".format(self.relative_eef_pos[0,:]))
         distance_in_reach = (torch.norm(self.relative_eef_pos - self.relative_commands_pos, dim=-1) < 0.1)
-        velocity_rewards = torch.exp(-torch.norm(torch.cat((self.relative_eef_lin_vel, self.relative_eef_ang_vel), dim=-1), dim=-1)) * distance_in_reach * self.arm_reward_settings["r_vel_scale"] * 0
+        velocity_rewards = torch.exp(-torch.norm(torch.cat((self.relative_eef_lin_vel, self.relative_eef_ang_vel), dim=-1), dim=-1)) * distance_in_reach * self.arm_reward_settings["r_vel_scale"]
         check = distance_in_reach*1
         check_check = 1
         # check=torch.cat((self.relative_eef_lin_vel, self.relative_eef_ang_vel), dim=-1)
@@ -604,8 +606,7 @@ class UsefulHound(VecTask):
         rew_base_height = torch.square(self.root_states[:, 2] - 0.52) * self.rew_scales["base_height"] # TODO add target base height to cfg  # 0.52
 
         # torque penalty
-        rew_torque = torch.sum(torch.square(self.torques[:,12:]), dim=1) * self.rew_scales["torque"]
-
+        rew_torque = torch.sum(torch.square(self.torques), dim=1) * self.rew_scales["torque"]
         # joint vel penalty
         rew_arm_dof_vel = torch.sum(torch.square(self.arm_dof_vel), dim=1) * self.rew_scales["arm_dof_vel"]
         rew_hound_dof_vel = torch.sum(torch.square(self.hound_dof_vel), dim=1) * self.rew_scales["hound_dof_vel"]
@@ -649,7 +650,7 @@ class UsefulHound(VecTask):
 
         # # add termination reward
         # self.rew_buf += self.rew_scales["termination"] * self.reset_buf * ~self.timeout_buf
-        self.rew_buf = arm_rewards + rew_arm_joint_acc + rew_arm_dof_vel + rew_torque #+ rew_hound_dof_vel + rew_lin_vel + rew_ang_vel + rew_orient + rew_basepos + rew_base_height + rew_joint_acc + rew_stumble + rew_action_rate + rew_imitate
+        self.rew_buf = arm_rewards + rew_arm_joint_acc + rew_arm_dof_vel + rew_torque #+ rew_lin_vel + rew_ang_vel + rew_orient + rew_basepos #+ rew_hound_dof_vel + rew_base_height + rew_joint_acc + rew_stumble + rew_action_rate + rew_imitate
         self.rew_buf = torch.clip(self.rew_buf, min=0., max=None)
         # log episode reward sums
         # self.episode_sums["lin_vel_xy"] += rew_lin_vel_xy
@@ -683,7 +684,7 @@ class UsefulHound(VecTask):
         hound_velocities = torch_rand_float(-0.1, 0.1, (len(env_ids), self.hound_num_dof), device=self.device)
         arm_positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.hound_num_dof), device=self.device)
         arm_velocities = torch_rand_float(-0.1, 0.1, (len(env_ids), self.arm_num_dof), device=self.device)
-        self.hound_dof_pos[env_ids] = self.hound_default_dof_pos[env_ids] * hound_positions_offset
+        self.hound_dof_pos[env_ids] = self.hound_default_dof_pos[env_ids] #* hound_positions_offset
         self.hound_dof_vel[env_ids] = hound_velocities
         self.arm_dof_pos[env_ids] = self.houndarm_default_dof_pos
         self.arm_dof_vel[env_ids] = arm_velocities
@@ -711,8 +712,6 @@ class UsefulHound(VecTask):
         self.spherical_commands[env_ids,0] = torch_rand_float(self.sph_command_x_range[0], self.sph_command_x_range[1], (len(env_ids), 1), device=self.device).squeeze()
         self.spherical_commands[env_ids,1] = torch_rand_float(self.sph_command_y_range[0], self.sph_command_y_range[1], (len(env_ids), 1), device=self.device).squeeze()
         self.spherical_commands[env_ids,2] = torch_rand_float(self.sph_command_z_range[0], self.sph_command_z_range[1], (len(env_ids), 1), device=self.device).squeeze()
-        self.spherical_commands[env_ids,3] = torch_rand_float(self.sph_command_T_range[0], self.sph_command_T_range[1], (len(env_ids), 1), device=self.device).squeeze()
-        self.spherical_commands[env_ids,4] = 0.
         reset_noise = torch.rand((len(env_ids), 6), device=self.device)
         pos = tensor_clamp(
             self.houndarm_default_dof_pos.unsqueeze(0) +
@@ -826,7 +825,7 @@ class UsefulHound(VecTask):
             ######################################################################
             ## for arm ###########################################################
             # Control arm (scale value first)
-            u_arm = self.actions[:,12:]
+            u_arm = self.actions[:,:]
             u_arm = u_arm * self.arm_cmd_limit / self.arm_action_scale
             u_arm = self._compute_osc_torques(dpose=u_arm)
             # self._arm_control[:, :] = u_arm # self._arm_control don't use
@@ -834,8 +833,8 @@ class UsefulHound(VecTask):
             ######################################################################
             ######################################################################
             torque_leg = torch.zeros(self.num_envs, 12, device=self.device)
-            torques = torch.clip(self.Kp*(self.action_scale*self.actions[:,:12] + self.hound_default_dof_pos - self.hound_dof_pos) - self.Kd*self.hound_dof_vel,
-                                 -80., 80.)
+            # torques = torch.clip(self.Kp*(self.action_scale*self.actions[:,:12] + self.hound_default_dof_pos - self.hound_dof_pos) - self.Kd*self.hound_dof_vel,
+            #                      -80., 80.)
             ######################################################################
             ## for arm ###########################################################
             torques_arm = u_arm #torch.zeros(self.num_envs,6, device=self.device) 
@@ -844,10 +843,10 @@ class UsefulHound(VecTask):
             ######################################################################
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torques))                    
             # pos_arm = torch.zeros_like(u_arm)
-            # position_input = torch.cat([self.hound_default_dof_pos,pos_arm], axis=1) 
-            # self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(position_input))
+            position_input = torch.cat([self.hound_default_dof_pos,self.arm_dof_pos], axis=1) 
+            self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(position_input))
             # self.torques = torques[:,0:12] # FIX
-            self.torques = torques.view(self.torques.shape)
+            self.torques = torques[:,12:].view(self.torques.shape)
             self.gym.simulate(self.sim)
             if self.device == 'cpu':
                 self.gym.fetch_results(self.sim, True)
@@ -868,6 +867,10 @@ class UsefulHound(VecTask):
         # prepare quantities
         self.base_quat = self.root_states[:, 3:7]
         # self.relative_commands_pos = quat_rotate_inverse(self.base_quat, self.arm_commands[:, :3] - self._root_state[:, :3])
+        x,y,z = spherical_to_cartesian(self.spherical_commands[:,0], self.spherical_commands[:,1], self.spherical_commands[:,2])
+        self.relative_commands_pos[:,0] = x
+        self.relative_commands_pos[:,1] = y
+        self.relative_commands_pos[:,2] = z
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         self.eef_lin_vel = quat_rotate_inverse(self.base_quat, self._eef_state[:, 7:10])

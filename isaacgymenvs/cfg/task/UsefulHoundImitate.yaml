@@ -1,11 +1,11 @@
 # used to create the object
-name: UsefulHound
+name: UsefulHoundImitate
 
 physics_engine: 'physx'
 
 env:
   numEnvs: ${resolve_default:4096,${...num_envs}}
-  numObservations: 55 # 19 #55 #10 #73 #61 # 204 #(Hound pos)3 + (Hound vel)3 + (Hound ori)3 + (Hound command)3 + (Hound lastact)18 + (Hound dof pos)12 + (Hound dof vel)12 + (groundvis)140 + (manipulator)3+4+3
+  numObservations: 55 #10 #73 #61 # 204 #(Hound pos)3 + (Hound vel)3 + (Hound ori)3 + (Hound command)3 + (Hound lastact)18 + (Hound dof pos)12 + (Hound dof vel)12 + (groundvis)140 + (manipulator)3+4+3
   numActions: 18 # (Hound)12 + (manipulator)6
   envSpacing: 3.  # [m]
   enableDebugVis: False
@@ -99,7 +99,7 @@ env:
     calfName: "calf"
     endpointName: "end_link"
     collapseFixedJoints: false
-    fixBaseLink: true
+    fixBaseLink: false
     defaultDofDriveMode: 4 # see GymDofDriveModeFlags (0 is none, 1 is pos tgt, 2 is vel tgt, 4 effort)
 
   learn:
@@ -159,7 +159,7 @@ env:
     pushInterval_s: 15
 
     # episode length in seconds
-    episodeLength_s: 4 #4 #10 #20
+    episodeLength_s: 20 #4 #10 #20
 
   # viewer cam:
   viewer:
