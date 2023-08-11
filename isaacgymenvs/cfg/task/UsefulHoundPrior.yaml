@@ -4,11 +4,11 @@ name: UsefulHoundPrior
 physics_engine: 'physx'
 
 env:
-  mode: Manipulation # WholeBody | Locomotion | Locomotion_vel | Manipulation
+  mode: Manipulation # WholeBody_Manipulation | Locomotion_pos | Locomotion_vel | Manipulation
   ManipulationControlType: joint # osc | joint
   
   numEnvs: ${resolve_default:4096,${...num_envs}}
-  numObservations: 28 #21 #48 #10 #73 #61 # 204
+  numObservations: 15 # before exp4: 28
   numActions: 6 #12 # (Hound)12 + (manipulator)6
   envSpacing: 3.  # [m]
   enableDebugVis: False
@@ -111,12 +111,12 @@ env:
     linvelxyzRewardScale : 0 #-1           # Manipulation, -
     baseposRewardScale : 0 #-1             # Manipulation, -
   
-    manijointVelRewardScale: -0.00003 #-0
-    manijointAccRewardScale: -0.0000025  #-0
+    manijointVelRewardScale: -0.0003 #-0.00003 #-0
+    manijointAccRewardScale: -0.00025 #-0.0000025  #-0
     locojointVelRewardScale: 0 #-0.00003
     locojointAccRewardScale: 0 #-0.0000025 
-    torqueRewardScale: -0.0000025 #-0.000025 
-    actionRateRewardScale: -0.0001 # -0.01
+    torqueRewardScale: -0.0000025 #exp3:-0.00025 #exp2: -0.0000025
+    actionRateRewardScale: -0.0001 #exp3:-0.001 #exp2: -0.0001 
     hipRewardScale: 0 # -0.1
 
     terminalReward: 0.0

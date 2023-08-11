@@ -507,12 +507,6 @@ class UsefulHoundPrior(VecTask):
             
         elif(self.maniControlMode == 'osc' and self.TrainingMode == "Manipulation"):
             self.obs_buf = torch.cat((  
-                                        self.relative_eef_pos, # 3
-                                        self.relative_eef_quat, # 4
-                                        self.relative_commands_pos #3
-                                        ), dim=-1)
-        elif(self.maniControlMode == 'joint' and self.TrainingMode == "Manipulation"):
-            self.obs_buf = torch.cat((  
                                         self.actions[:], # 6
                                         self.mani_dof_pos * self.dof_pos_scale, # 6
                                         self.mani_dof_vel * self.dof_vel_scale, # 6
@@ -520,6 +514,35 @@ class UsefulHoundPrior(VecTask):
                                         self.relative_eef_quat, # 4
                                         self.relative_commands_pos #3
                                         ), dim=-1)
+        elif(self.maniControlMode == 'joint' and self.TrainingMode == "Manipulation"):
+            self.obs_buf = torch.cat((  
+                                        # for exp4
+                                        self.mani_dof_pos * self.dof_pos_scale, # 6
+                                        self.mani_dof_vel * self.dof_vel_scale, # 6
+                                        self.relative_commands_pos - self.relative_eef_pos # 3
+                                        # for exp2,3
+                                        # self.actions[:], # 6
+                                        # self.mani_dof_pos * self.dof_pos_scale, # 6
+                                        # self.mani_dof_vel * self.dof_vel_scale, # 6
+                                        # self.relative_eef_pos, # 3
+                                        # self.relative_eef_quat, # 4
+                                        # self.relative_commands_pos #3
+                                        ), dim=-1)
+        elif(self.maniControlMode == 'joint' and self.TrainingMode == "WholeBody_Manipulation"):
+            self.obs_buf = torch.cat((  
+                                        # for exp4
+                                        self.mani_dof_pos * self.dof_pos_scale, # 6
+                                        self.mani_dof_vel * self.dof_vel_scale, # 6
+                                        self.relative_commands_pos - self.relative_eef_pos # 3
+                                        # for exp2,3
+                                        # self.actions[:], # 6
+                                        # self.mani_dof_pos * self.dof_pos_scale, # 6
+                                        # self.mani_dof_vel * self.dof_vel_scale, # 6
+                                        # self.relative_eef_pos, # 3
+                                        # self.relative_eef_quat, # 4
+                                        # self.relative_commands_pos #3
+                                        ), dim=-1)
+            
 
     def compute_reward(self):
         self.relative_eef_sph[:,0], self.relative_eef_sph[:,1], self.relative_eef_sph[:,2] = spherical_to_cartesian(self.relative_eef_pos[:,0], self.relative_eef_pos[:,1], self.relative_eef_pos[:,2])
@@ -709,13 +732,13 @@ class UsefulHoundPrior(VecTask):
         q, qd = self.mani_dof_pos[:, :6], self.mani_dof_vel[:, :6]
     
         mm_inv = torch.inverse(self._mm)
-        m_eef_inv = self._j_eef @ mm_inv @ torch.transpose(self._j_eef, 1, 2)
-        m_eef = torch.inverse(m_eef_inv)
+        m_eef_inv = self._j_eef @ mm_inv @ torch.transpose(self._j_eef, 1, 2) # big lamda inverse
+        m_eef = torch.inverse(m_eef_inv) # big lamda
 
         # Transform our cartesian action `dpose` into joint torques `u`
-        vel = torch.cat((self.relative_eef_lin_vel, self.relative_eef_ang_vel), dim=-1)
+        vel = torch.cat((self.relative_eef_lin_vel, self.relative_eef_ang_vel), dim=-1) # body Twist
         u = torch.transpose(self._j_eef, 1, 2) @ m_eef @ (
-                self.arm_kp * dpose - self.arm_kd * (vel)).unsqueeze(-1)
+                self.arm_kp * dpose - self.arm_kd * (vel)).unsqueeze(-1) # u : torque
 
         # Nullspace control torques `u_null` prevents large changes in joint configuration
         # They are added into the nullspace of OSC so that the end effector orientation remains constant
