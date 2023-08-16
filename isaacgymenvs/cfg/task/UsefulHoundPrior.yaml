@@ -4,12 +4,12 @@ name: UsefulHoundPrior
 physics_engine: 'physx'
 
 env:
-  mode: Manipulation # WholeBody_Manipulation | Locomotion_pos | Locomotion_vel | Manipulation
+  mode: Locomotion_pos # WholeBody_Locomotion | WholeBody_Manipulation | Locomotion_pos | Locomotion_vel | Manipulation
   ManipulationControlType: joint # osc | joint
   
   numEnvs: ${resolve_default:4096,${...num_envs}}
-  numObservations: 15 # before exp4: 28
-  numActions: 6 #12 # (Hound)12 + (manipulator)6
+  numObservations: 49 #49 #73 # 49 #66 # 48 #73 #15 # before exp4: 28
+  numActions: 12 # 12 # 12 #18 #6 #12 # (Hound)12 + (manipulator)6
   envSpacing: 3.  # [m]
   enableDebugVis: False
 
@@ -41,12 +41,18 @@ env:
     rot: [0.0, 0.0, 0.0, 1.0] # x,y,z,w [quat]
     vLinear: [0.0, 0.0, 0.0]  # x,y,z [m/s]
     vAngular: [0.0, 0.0, 0.0]  # x,y,z [rad/s]
-
+  
+  randomCommandPositionRanges:
+    x: [-3., 3.]
+    y: [-3., 3.]
+    z: [1, 2]
+    yaw: [-3.14, 3.14]
   randomCommandVelocityRanges:
     # train
     linear_x: [-2., 2.] # min max [m/s]
     linear_y: [-1., 1.]   # min max [m/s]
-    yaw: [-3.14, 3.14]    # min max [rad/s]
+    #yaw: [-3.14, 3.14]
+    yaw: [-0.5, 0.5]    # min max [rad/s]
 
   randomArmCommandPositionRanges:
     x: [0.15, 0.75] 
@@ -92,7 +98,7 @@ env:
     calfName: "calf"
     endpointName: "end_link"
     collapseFixedJoints: false
-    fixBaseLink: true
+    fixBaseLink: false
     defaultDofDriveMode: 4 # see GymDofDriveModeFlags (0 is none, 1 is pos tgt, 2 is vel tgt, 4 effort)
 
   learn:
@@ -100,28 +106,29 @@ env:
     # rewards
     linearVelocityXYRewardScale: 1.0    # Locomotion_vel, +
     angularVelocityZRewardScale: 0.5    # Locomotion_vel, +
-    feetAirTimeRewardScale:  1.0        # Locomotion_vel, +
-    linearVelocityZRewardScale: -4.0    # Locomotion_vel, -
+    feetAirTimeRewardScale:  0.2 #0.05 #0.2 #1.0   # Locomotion_vel, +
+    linearVelocityZRewardScale: -0.4    # Locomotion_vel, -
     angularVelocityXYRewardScale: -0.05 # Locomotion_vel, -
+    feetclearRewardScale: -15.0          # Locomotion_vel, -
     
     eefdistRewardScale: 1.5             # Manipulation, +
     eefvelRewardScale: 0                # Manipulation, +
-    imitateRewardScale : 0 # 0.2            # Manipulation, +
-    angvelrpyRewardScale : 0 #-1           # Manipulation, -
-    linvelxyzRewardScale : 0 #-1           # Manipulation, -
-    baseposRewardScale : 0 #-1             # Manipulation, -
+    imitateRewardScale : 1 # 0.2            # Manipulation, +
+    angvelrpyRewardScale : -0.1 #-1           # Manipulation, - # this scale is to big
+    linvelxyzRewardScale : -0.1 #-1           # Manipulation, -
+    baseposRewardScale : -0.1 #-1             # Manipulation, -
   
     manijointVelRewardScale: -0.0003 #-0.00003 #-0
     manijointAccRewardScale: -0.00025 #-0.0000025  #-0
-    locojointVelRewardScale: 0 #-0.00003
-    locojointAccRewardScale: 0 #-0.0000025 
-    torqueRewardScale: -0.0000025 #exp3:-0.00025 #exp2: -0.0000025
+    locojointVelRewardScale: -0.00003 #-0.00003
+    locojointAccRewardScale: -0.0000025 #-0.0000025 
+    torqueRewardScale: -0.0000025 #exp3:-0.00025 #exp2: -0.0000025 ## scale down need
     actionRateRewardScale: -0.0001 #exp3:-0.001 #exp2: -0.0001 
-    hipRewardScale: 0 # -0.1
+    hipRewardScale: -0.1 # -0.1
 
     terminalReward: 0.0
-    orientationRewardScale: -0 
-    baseHeightRewardScale: 0 #-5 
+    orientationRewardScale: -0.1 
+    baseHeightRewardScale:  -0.1  #-0.1 #-5 
     feetStumbleRewardScale: -0. 
     kneeCollisionRewardScale: -0.25 
     
@@ -153,7 +160,7 @@ env:
     pushInterval_s: 15
 
     # episode length in seconds
-    episodeLength_s: 4 #4 #10 #20
+    episodeLength_s: 10 #4 #10 #20
 
   # viewer cam:
   viewer:
