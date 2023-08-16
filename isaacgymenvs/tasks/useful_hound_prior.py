@@ -39,7 +39,19 @@ from typing import Tuple, Dict
 from isaacgymenvs.utils.torch_jit_utils import to_torch, quat_mul,quat_rotate, get_axis_params, torch_rand_float, normalize, quat_apply, quat_rotate_inverse, tensor_clamp, quat_from_angle_axis, quat_conjugate
 from isaacgymenvs.tasks.base.vec_task import VecTask
 
-
+## TODO ###################################
+## for keyboard input #####################
+import threading
+import queue
+import time
+from getkey import getkey
+def onKeyInput(keyQueue):
+    
+    while (True):
+        key = getkey()
+        keyQueue.put(key)
+## TODO ###################################
+## for keyboard input #####################
 @torch.jit.script
 def axisangle2quat(vec, eps=1e-6):
     """
@@ -81,14 +93,63 @@ def spherical_to_cartesian(r, theta, phi):
 class UsefulHoundPrior(VecTask):
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render):
-
+        
         self.cfg = cfg
+        if(self.cfg["env"]["test"] == True):
+            ## TODO ###################################
+            ## for keyboard input #####################
+            self.keyQueue = queue.Queue()
+            self.keyThread = threading.Thread(target=onKeyInput, args=(self.keyQueue,))
+            self.keyThread.daemon = True 
+            self.keyThread.start()
+
+            self.command_vel_x = 0.0
+            self.command_vel_y = 0.0
+            self.command_vel_yaw = 0.0
+            self.command_vel = 2
+
+            self.command_px = 0.3
+            self.command_py = 0.0
+            self.command_pz = 0.3
+            
+            self.beforekey = ""
+            ## TODO ###################################
+            ## for keyboard input #####################
+
+        
         self.height_samples = None
         self.custom_origins = False
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
         self.init_done = False
 
         self.TrainingMode = self.cfg["env"]["mode"]
+
+        if self.TrainingMode == "Locomotion_pos":
+            self.cfg["env"]["numObservations"] = 48
+            self.cfg["env"]["numActions"] = 12
+            self.cfg["env"]["ManipulationControlType"] = "joint"
+
+        elif self.TrainingMode == "Locomotion_vel":
+            self.cfg["env"]["numObservations"] = 48
+            self.cfg["env"]["numActions"] = 12
+            self.cfg["env"]["ManipulationControlType"] = "joint"
+
+        elif self.TrainingMode == "Manipulation":
+            self.cfg["env"]["numObservations"] = 28
+            self.cfg["env"]["numActions"] = 6
+            self.cfg["env"]["ManipulationControlType"] = "joint"
+
+        elif self.TrainingMode == "WholeBody_Manipulation":
+            self.cfg["env"]["numObservations"] = 73
+            self.cfg["env"]["numActions"] = 18
+            self.cfg["env"]["ManipulationControlType"] = "joint"
+
+        elif self.TrainingMode == "WholeBody_Locomotion":
+            self.cfg["env"]["numObservations"] = 66
+            self.cfg["env"]["numActions"] = 18
+            self.cfg["env"]["ManipulationControlType"] = "joint"
+
+
         self.maniControlMode = self.cfg["env"]["ManipulationControlType"] # osc | joint
         self.pushrobot = self.cfg["env"]["learn"]["pushRobots"]
 
@@ -260,8 +321,10 @@ class UsefulHoundPrior(VecTask):
         
         # for locomotion position commands
         self.pos_commands = torch.zeros(self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False) # x, y, z, yaw 
+        self.test_cmd = torch.zeros_like(self.pos_commands)
         self.relative_pos_commands = torch.zeros(self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False) # x, y, z, yaw
-
+        self.loco_pos_desired_vel = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False) # x, y, z
+        self.loco_pos_desired_vel_yaw = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False) # yaw
         # for locomotion velocity commands 
         self.commands = torch.zeros(self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False) # x vel, y vel, yaw vel, heading
         self.commands_scale = torch.tensor([self.lin_vel_scale, self.lin_vel_scale, self.ang_vel_scale], device=self.device, requires_grad=False,)
@@ -521,7 +584,7 @@ class UsefulHoundPrior(VecTask):
                                         self.loco_dof_vel * self.dof_vel_scale, # 12
                                         self.mani_dof_vel * self.dof_vel_scale, # 6
                                         self.actions[:,:], # 18
-                                        self.commands[:, :3] * self.commands_scale,
+                                        self.commands[:, :3] * self.commands_scale, # 3
                                         ), dim=-1)
 
         if(self.TrainingMode == "Locomotion_vel"):
@@ -543,7 +606,9 @@ class UsefulHoundPrior(VecTask):
                                         self.loco_dof_pos * self.dof_pos_scale, # 12
                                         self.loco_dof_vel * self.dof_vel_scale, # 12
                                         self.actions[:,:12], # 12
-                                        self.relative_pos_commands,
+                                        self.loco_pos_desired_vel[:,:2],
+                                        self.loco_pos_desired_vel_yaw.unsqueeze(-1),
+                                        # self.relative_pos_commands,
                                         ), dim=-1)
             
         elif(self.maniControlMode == 'osc' and self.TrainingMode == "Manipulation"):
@@ -557,11 +622,6 @@ class UsefulHoundPrior(VecTask):
                                         ), dim=-1)
         elif(self.maniControlMode == 'joint' and self.TrainingMode == "Manipulation"):
             self.obs_buf = torch.cat((  
-                                        # for exp4,exp5
-                                        # self.mani_dof_pos * self.dof_pos_scale, # 6
-                                        # self.mani_dof_vel * self.dof_vel_scale, # 6
-                                        # self.relative_commands_pos - self.relative_eef_pos # 3
-                                        # for exp2,3
                                         self.actions[:], # 6
                                         self.mani_dof_pos * self.dof_pos_scale, # 6
                                         self.mani_dof_vel * self.dof_vel_scale, # 6
@@ -600,8 +660,40 @@ class UsefulHoundPrior(VecTask):
             
 
     def compute_reward(self):
+        # for test mode 
+        master_cmd = torch.zeros_like(self.pos_commands)
+        if(self.cfg["env"]["test"] == True):
+            if (self.keyQueue.qsize() > 0):
+                key = self.keyQueue.get()
+                if key == "w":
+                    self.test_cmd[:,0] = 3
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,3] = 0
+                elif key == "s":
+                    self.test_cmd[:,0] = -3
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,3] = 3.14
+                elif key == "d":
+                    self.test_cmd[:,0] = 0
+                    self.test_cmd[:,1] = -3
+                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,3] = -3.14/2
+                elif key == "a":
+                    self.test_cmd[:,0] = 0
+                    self.test_cmd[:,1] = 3
+                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,3] = 3.14/2
+                elif key == "p":
+                    self.test_cmd[:,0] = 0
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,3] = 0
+            master_cmd = self.test_cmd
+        else:
+            master_cmd = self.pos_commands
         
-        ## commamd processing
         # for manipulation 
         self.relative_eef_sph[:,0], self.relative_eef_sph[:,1], self.relative_eef_sph[:,2] = spherical_to_cartesian(self.relative_eef_pos[:,0], self.relative_eef_pos[:,1], self.relative_eef_pos[:,2])
         self.commands_sph[:,0] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,0] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,0]
@@ -612,21 +704,25 @@ class UsefulHoundPrior(VecTask):
         self.relative_commands_pos[:,0] = x
         self.relative_commands_pos[:,1] = y
         self.relative_commands_pos[:,2] = z
+        
         # for locomotion_position
-        self.relative_pos_commands[:,:3] = quat_rotate_inverse(self.base_quat, self.pos_commands[:,:3] - self.base_states[:,:3])
+        self.relative_pos_commands[:,:3] = quat_rotate_inverse(self.base_quat, master_cmd[:,:3] - self.base_states[:,:3])
         forward = quat_apply(self.base_quat, self.forward_vec) # base's 2d x vec
         heading = torch.atan2(forward[:, 1], forward[:, 0])
-        self.relative_pos_commands[:,3] = self.pos_commands[:, 3] - heading
-        loco_pos_desired_vel_x = torch.tanh(self.relative_pos_commands[:,0]) * self.command_x_range[1]
-        loco_pos_desired_vel_y = torch.tanh(self.relative_pos_commands[:,1]) * self.command_y_range[1]
+        self.relative_pos_commands[:,3] = master_cmd[:, 3] - heading
+        loco_pos_desired_vel_x = torch.tanh(self.relative_pos_commands[:,0]) * 1
+        loco_pos_desired_vel_y = torch.tanh(self.relative_pos_commands[:,1]) * 1
         loco_pos_desired_vel_z = torch.tanh(self.relative_pos_commands[:,2]) * 0.5
-        loco_pos_desired_vel = torch.cat((loco_pos_desired_vel_x.unsqueeze(-1), loco_pos_desired_vel_y.unsqueeze(-1), loco_pos_desired_vel_z.unsqueeze(-1)),dim=-1)
-        pos_standing_mode = (torch.norm(loco_pos_desired_vel[:, :2], dim=1) <= 0.25).unsqueeze(1) 
-        loco_pos_desired_vel_yaw = torch.tanh(self.relative_pos_commands[:,3]) * self.command_yaw_range[1]
-        # velocity command following reward (for Locomotion_vel)
+        self.loco_pos_desired_vel = torch.cat((loco_pos_desired_vel_x.unsqueeze(-1), loco_pos_desired_vel_y.unsqueeze(-1), loco_pos_desired_vel_z.unsqueeze(-1)),dim=-1)
+        self.loco_pos_desired_vel_yaw = torch.tanh(self.relative_pos_commands[:,3]) * self.command_yaw_range[1]
+        pos_standing_mode = (torch.norm(self.loco_pos_desired_vel[:, :2], dim=1) <= 0.25).unsqueeze(1) 
+        self.loco_pos_desired_vel_yaw *= (torch.norm(self.loco_pos_desired_vel[:, :2], dim=1) > 0.25) # set small commands to zero
+        self.loco_pos_desired_vel *= (torch.norm(self.loco_pos_desired_vel[:, :2], dim=1) > 0.25).unsqueeze(1) # set small commands to zero
+        
+        # velocity command following reward 
         if(self.TrainingMode == "Locomotion_pos"):
-            lin_vel_error = torch.sum(torch.square(loco_pos_desired_vel - self.eef_lin_vel[:,:3]), dim=1)
-            ang_vel_error = torch.square(loco_pos_desired_vel_yaw - self.base_ang_vel[:, 2]) # yaw error
+            lin_vel_error = torch.sum(torch.square(self.loco_pos_desired_vel[:,:2] - self.base_lin_vel[:,:2]), dim=1) #self.eef_lin_vel[:,:2]), dim=1)
+            ang_vel_error = torch.square(self.loco_pos_desired_vel_yaw - self.base_ang_vel[:, 2]) # yaw error
             rew_lin_vel_xy = torch.exp(-lin_vel_error/0.25) * self.rew_scales["lin_vel_xy"]
             rew_ang_vel_z = torch.exp(-ang_vel_error/0.25) * self.rew_scales["ang_vel_z"] # yaw error
         else:
@@ -680,13 +776,13 @@ class UsefulHoundPrior(VecTask):
         self.feet_stance_time += contact * self.dt
         self.feet_air_time += ~contact * self.dt
 
-        self.stance_low_boundary = torch.tensor(-0.3, device=self.device)
-        self.stance_upper_boundary = torch.tensor(0.3, device=self.device)
+        self.stance_low_boundary = torch.tensor(-0.3, device=self.device, requires_grad=False)
+        self.stance_upper_boundary = torch.tensor(0.3, device=self.device, requires_grad=False)
 
-        self.air_time_lower_boundary = torch.tensor(0.25, device=self.device)
-        self.stance_time_lower_boundary = torch.tensor(0.25, device=self.device)
-        self.air_time_upper_boundary = torch.tensor(0.3, device=self.device)
-        self.stance_time_upper_boundary = torch.tensor(0.3, device=self.device)
+        self.air_time_lower_boundary = torch.tensor(0.25, device=self.device, requires_grad=False)
+        self.stance_time_lower_boundary = torch.tensor(0.25, device=self.device, requires_grad=False)
+        self.air_time_upper_boundary = torch.tensor(0.3, device=self.device, requires_grad=False)
+        self.stance_time_upper_boundary = torch.tensor(0.3, device=self.device, requires_grad=False)
 
         if(self.TrainingMode == "Locomotion_pos"):
             air_time_total = torch.sum(torch.minimum(torch.maximum(self.feet_stance_time - self.feet_air_time, self.stance_low_boundary), self.stance_upper_boundary) * pos_standing_mode.repeat(1, 4), dim=1)

@@ -36,10 +36,11 @@ def make(
             cfg = compose(config_name="config", overrides=[f"task={task}"])
             cfg_dict = omegaconf_to_dict(cfg.task)
             cfg_dict['env']['numEnvs'] = num_envs
+            cfg_dict['env']['test'] = cfg.test
     # reuse existing config
     else:
         cfg_dict = omegaconf_to_dict(cfg.task)
-
+        cfg_dict['env']['test'] = cfg.test
     create_rlgpu_env = get_rlgames_env_creator(
         seed=seed,
         task_config=cfg_dict,

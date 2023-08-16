@@ -4,12 +4,13 @@ name: UsefulHoundPrior
 physics_engine: 'physx'
 
 env:
+  test: false
   mode: Locomotion_pos # WholeBody_Locomotion | WholeBody_Manipulation | Locomotion_pos | Locomotion_vel | Manipulation
   ManipulationControlType: joint # osc | joint
   
   numEnvs: ${resolve_default:4096,${...num_envs}}
-  numObservations: 49 #49 #73 # 49 #66 # 48 #73 #15 # before exp4: 28
-  numActions: 12 # 12 # 12 #18 #6 #12 # (Hound)12 + (manipulator)6
+  numObservations: 0 #48 #49 #73 # 49 #66 # 48 #73 #15 # before exp4: 28
+  numActions: 0 #12 # 12 # 12 #18 #6 #12 # (Hound)12 + (manipulator)6
   envSpacing: 3.  # [m]
   enableDebugVis: False
 
