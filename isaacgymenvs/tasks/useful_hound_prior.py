@@ -125,7 +125,7 @@ class UsefulHoundPrior(VecTask):
         self.TrainingMode = self.cfg["env"]["mode"]
 
         if self.TrainingMode == "Locomotion_pos":
-            self.cfg["env"]["numObservations"] = 48
+            self.cfg["env"]["numObservations"] = 49
             self.cfg["env"]["numActions"] = 12
             self.cfg["env"]["ManipulationControlType"] = "joint"
 
@@ -188,13 +188,17 @@ class UsefulHoundPrior(VecTask):
             self.rew_scales["foot_clear"] = self.cfg["env"]["learn"]["feetclearRewardScale"]
             self.rew_scales["lin_vel_z"] = self.cfg["env"]["learn"]["linearVelocityZRewardScale"] 
             self.rew_scales["ang_vel_xy"] = self.cfg["env"]["learn"]["angularVelocityXYRewardScale"] 
-
+            self.rew_scales["feet_drag"] = self.cfg["env"]["learn"]["feetDragRewardScale"] 
+            self.rew_scales["loco_joint_acc"] = self.cfg["env"]["learn"]["locojointAccRewardScale"]
+            self.rew_scales["loco_dof_vel"] = self.cfg["env"]["learn"]["locojointVelRewardScale"]
             self.rew_scales["eef_dist_scale"] = 0
             self.rew_scales["eef_vel_scale"] = 0
             self.rew_scales["rew_imitate"] = 0
             self.rew_scales["ang_vel_rpy"] = 0
             self.rew_scales["lin_vel_xyz"] = 0
             self.rew_scales["basepos"] = 0
+            self.rew_scales["mani_joint_acc"] = 0
+            self.rew_scales["mani_dof_vel"] = 0
         
         else :
             self.rew_scales["lin_vel_xy"] = 0
@@ -203,24 +207,23 @@ class UsefulHoundPrior(VecTask):
             self.rew_scales["foot_clear"] = 0
             self.rew_scales["lin_vel_z"] = 0
             self.rew_scales["ang_vel_xy"] = 0
-
+            self.rew_scales["loco_joint_acc"] = 0
+            self.rew_scales["loco_dof_vel"] = 0
             self.rew_scales["eef_dist_scale"] = self.cfg["env"]["learn"]["eefdistRewardScale"]
             self.rew_scales["eef_vel_scale"] = self.cfg["env"]["learn"]["eefvelRewardScale"]
             self.rew_scales["rew_imitate"] = self.cfg["env"]["learn"]["imitateRewardScale"]
             self.rew_scales["ang_vel_rpy"] = self.cfg["env"]["learn"]["angvelrpyRewardScale"]
             self.rew_scales["lin_vel_xyz"] = self.cfg["env"]["learn"]["linvelxyzRewardScale"]
             self.rew_scales["basepos"] = self.cfg["env"]["learn"]["baseposRewardScale"]
+            self.rew_scales["mani_joint_acc"] = self.cfg["env"]["learn"]["manijointAccRewardScale"]
+            self.rew_scales["mani_dof_vel"] = self.cfg["env"]["learn"]["manijointVelRewardScale"]
 
         self.rew_scales["orient"] = self.cfg["env"]["learn"]["orientationRewardScale"] 
         self.rew_scales["torque"] = self.cfg["env"]["learn"]["torqueRewardScale"]
-        self.rew_scales["loco_joint_acc"] = self.cfg["env"]["learn"]["locojointAccRewardScale"]
         self.rew_scales["base_height"] = self.cfg["env"]["learn"]["baseHeightRewardScale"]
         self.rew_scales["collision"] = self.cfg["env"]["learn"]["kneeCollisionRewardScale"]
         self.rew_scales["stumble"] = self.cfg["env"]["learn"]["feetStumbleRewardScale"]
         self.rew_scales["action_rate"] = self.cfg["env"]["learn"]["actionRateRewardScale"]
-        self.rew_scales["mani_joint_acc"] = self.cfg["env"]["learn"]["manijointAccRewardScale"]
-        self.rew_scales["mani_dof_vel"] = self.cfg["env"]["learn"]["manijointVelRewardScale"]
-        self.rew_scales["loco_dof_vel"] = self.cfg["env"]["learn"]["locojointVelRewardScale"]
         self.rew_scales["termination"] = self.cfg["env"]["learn"]["terminalReward"]
         self.rew_scales["hip"] = self.cfg["env"]["learn"]["hipRewardScale"]
 
@@ -238,6 +241,7 @@ class UsefulHoundPrior(VecTask):
         self.max_episode_length_s = self.cfg["env"]["learn"]["episodeLength_s"] 
         self.max_episode_length = int(self.max_episode_length_s/ self.dt + 0.5)
         self.push_interval = int(self.cfg["env"]["learn"]["pushInterval_s"] / self.dt + 0.5)
+        self.command_interval = int(self.cfg["env"]["learn"]["commandInterval_s"] / self.dt + 0.5)
         self.allow_knee_contacts = self.cfg["env"]["learn"]["allowKneeContacts"]
         self.Kp = self.cfg["env"]["control"]["stiffness"]
         self.Kd = self.cfg["env"]["control"]["damping"]
@@ -303,6 +307,7 @@ class UsefulHoundPrior(VecTask):
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
+        self.eef_forward_vec = to_torch([0., 0., 1.], device=self.device).repeat((self.num_envs, 1))
         self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
@@ -350,7 +355,7 @@ class UsefulHoundPrior(VecTask):
                              "arm_second_vel": torch_zeros(), "mani_joint_acc": torch_zeros(), "loco_joint_vel": torch_zeros(), "mani_joint_vel": torch_zeros(),
                              "imitate_reward": torch_zeros(), "mani_reward": torch_zeros(), "lin_vel_xyz": torch_zeros(), "ang_vel_rpy":torch_zeros(),
                              "orient":torch_zeros(), "torques":torch_zeros(), "loco_joint_acc": torch_zeros(), "stumble": torch_zeros(), "action_rate": torch_zeros(),
-                             "base_position":torch_zeros(), "base_height":torch_zeros(), "airTime":torch_zeros(), "hip_cosmetic":torch_zeros(), "feet_clear":torch_zeros()}
+                             "base_position":torch_zeros(), "base_height":torch_zeros(), "airTime":torch_zeros(), "hip_cosmetic":torch_zeros(), "feet_clear":torch_zeros(), "feet_drag":torch_zeros()}
 
         # OSC Gains
         self.arm_kp = to_torch([150.] * 6, device=self.device)
@@ -606,9 +611,9 @@ class UsefulHoundPrior(VecTask):
                                         self.loco_dof_pos * self.dof_pos_scale, # 12
                                         self.loco_dof_vel * self.dof_vel_scale, # 12
                                         self.actions[:,:12], # 12
-                                        self.loco_pos_desired_vel[:,:2],
-                                        self.loco_pos_desired_vel_yaw.unsqueeze(-1),
-                                        # self.relative_pos_commands,
+                                        # self.loco_pos_desired_vel[:,:2],
+                                        # self.loco_pos_desired_vel_yaw.unsqueeze(-1),
+                                        self.relative_pos_commands,
                                         ), dim=-1)
             
         elif(self.maniControlMode == 'osc' and self.TrainingMode == "Manipulation"):
@@ -657,59 +662,133 @@ class UsefulHoundPrior(VecTask):
                                         self.relative_eef_quat, # 4
                                         self.relative_commands_pos #3
                                         ), dim=-1)
-            
 
-    def compute_reward(self):
-        # for test mode 
-        master_cmd = torch.zeros_like(self.pos_commands)
-        if(self.cfg["env"]["test"] == True):
+    def update_commands(self, env_ids):
+        self.commands[env_ids, 0] = torch_rand_float(self.command_x_range[0], self.command_x_range[1], (len(env_ids), 1), device=self.device).squeeze()
+        self.commands[env_ids, 1] = torch_rand_float(self.command_y_range[0], self.command_y_range[1], (len(env_ids), 1), device=self.device).squeeze()
+        self.commands[env_ids, 2] = torch_rand_float(self.command_yaw_range[0], self.command_yaw_range[1], (len(env_ids), 1), device=self.device).squeeze()
+        self.commands[env_ids] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.25).unsqueeze(1) # set small commands to zero
+        self.standing_mode[env_ids] = (torch.norm(self.commands[env_ids, :2], dim=1) <= 0.25).unsqueeze(1) 
+
+    def test_command(self):
+        if self.TrainingMode == "Locomotion_pos":
             if (self.keyQueue.qsize() > 0):
                 key = self.keyQueue.get()
                 if key == "w":
                     self.test_cmd[:,0] = 3
                     self.test_cmd[:,1] = 0
-                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,2] = 0.98
                     self.test_cmd[:,3] = 0
                 elif key == "s":
                     self.test_cmd[:,0] = -3
                     self.test_cmd[:,1] = 0
-                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,2] = 0.98
                     self.test_cmd[:,3] = 3.14
                 elif key == "d":
                     self.test_cmd[:,0] = 0
                     self.test_cmd[:,1] = -3
-                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,2] = 0.98
                     self.test_cmd[:,3] = -3.14/2
                 elif key == "a":
                     self.test_cmd[:,0] = 0
                     self.test_cmd[:,1] = 3
-                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,2] = 0.98
                     self.test_cmd[:,3] = 3.14/2
-                elif key == "p":
+                else:
+                    self.test_cmd[:,0] = 0
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0.98
+                    self.test_cmd[:,3] = 0
+        elif self.TrainingMode == "WholeBody_Manipulation":
+            if (self.keyQueue.qsize() > 0):
+                key = self.keyQueue.get()
+                if key == "w":
+                    self.test_cmd[:,0] = 0.3
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0.5
+                    self.test_cmd[:,3] = 0
+                elif key == "s":
+                    self.test_cmd[:,0] = 0.3
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0.3
+                    self.test_cmd[:,3] = 0
+                elif key == "d":
+                    self.test_cmd[:,0] = 0.3
+                    self.test_cmd[:,1] = -0.3
+                    self.test_cmd[:,2] = 0.3
+                    self.test_cmd[:,3] = 0
+                elif key == "a":
+                    self.test_cmd[:,0] = 0.3
+                    self.test_cmd[:,1] = 0.3
+                    self.test_cmd[:,2] = 0.3
+                    self.test_cmd[:,3] = 0
+                else:
+                    self.test_cmd[:,0] = 0.3
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0.3
+                    self.test_cmd[:,3] = 0
+
+        elif self.TrainingMode == "Locomotion_vel":
+            if (self.keyQueue.qsize() > 0):
+                key = self.keyQueue.get()
+                if key == "w":
+                    self.test_cmd[:,0] = 1
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,3] = 0
+                elif key == "s":
+                    self.test_cmd[:,0] = -1
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0
+                    self.test_cmd[:,3] = 0
+                elif key == "d":
+                    self.test_cmd[:,0] = 0.3
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = -0.5
+                    self.test_cmd[:,3] = 0
+                elif key == "a":
+                    self.test_cmd[:,0] = 0.3
+                    self.test_cmd[:,1] = 0
+                    self.test_cmd[:,2] = 0.5
+                    self.test_cmd[:,3] = 0
+                else:
                     self.test_cmd[:,0] = 0
                     self.test_cmd[:,1] = 0
                     self.test_cmd[:,2] = 0
                     self.test_cmd[:,3] = 0
-            master_cmd = self.test_cmd
+
+    def compute_reward(self):
+        # for test mode 
+        master_loco_pos_cmd = torch.zeros_like(self.pos_commands)
+        master_mani_cmd = torch.zeros_like(self.relative_commands_pos)
+        master_loco_vel_cmd = torch.zeros_like(self.commands)
+        if(self.cfg["env"]["test"] == True):
+            self.test_command()
+            master_loco_pos_cmd = self.test_cmd
+            master_mani_cmd = self.test_cmd[:,:3]
+            master_loco_vel_cmd = self.test_cmd[:,:3]
         else:
-            master_cmd = self.pos_commands
+            master_loco_pos_cmd = self.pos_commands
+            master_mani_cmd = self.relative_commands_pos
+            master_loco_vel_cmd = self.commands
         
         # for manipulation 
-        self.relative_eef_sph[:,0], self.relative_eef_sph[:,1], self.relative_eef_sph[:,2] = spherical_to_cartesian(self.relative_eef_pos[:,0], self.relative_eef_pos[:,1], self.relative_eef_pos[:,2])
-        self.commands_sph[:,0] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,0] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,0]
-        self.commands_sph[:,1] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,1] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,1]
-        self.commands_sph[:,2] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,2] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,2]        
-        x,y,z = spherical_to_cartesian(self.commands_sph[:,0], self.commands_sph[:,1], self.commands_sph[:,2])
-        self.spherical_commands[:,4] += self.dt
-        self.relative_commands_pos[:,0] = x
-        self.relative_commands_pos[:,1] = y
-        self.relative_commands_pos[:,2] = z
+        if self.cfg["env"]["test"] == False:
+            self.relative_eef_sph[:,0], self.relative_eef_sph[:,1], self.relative_eef_sph[:,2] = spherical_to_cartesian(self.relative_eef_pos[:,0], self.relative_eef_pos[:,1], self.relative_eef_pos[:,2])
+            self.commands_sph[:,0] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,0] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,0]
+            self.commands_sph[:,1] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,1] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,1]
+            self.commands_sph[:,2] = (self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.relative_eef_sph[:,2] + (1 - self.spherical_commands[:,4]/self.spherical_commands[:,3]) * self.spherical_commands[:,2]        
+            x,y,z = spherical_to_cartesian(self.commands_sph[:,0], self.commands_sph[:,1], self.commands_sph[:,2])
+            self.spherical_commands[:,4] += self.dt
+            self.relative_commands_pos[:,0] = x
+            self.relative_commands_pos[:,1] = y
+            self.relative_commands_pos[:,2] = z
         
         # for locomotion_position
-        self.relative_pos_commands[:,:3] = quat_rotate_inverse(self.base_quat, master_cmd[:,:3] - self.base_states[:,:3])
-        forward = quat_apply(self.base_quat, self.forward_vec) # base's 2d x vec
+        self.relative_pos_commands[:,:3] = quat_rotate_inverse(self.base_quat, master_loco_pos_cmd[:,:3] - self.eef_state[:,:3]) # self.base_state[:,:3]
+        forward = quat_apply(self.eef_state[:, 3:7], self.forward_vec) 
         heading = torch.atan2(forward[:, 1], forward[:, 0])
-        self.relative_pos_commands[:,3] = master_cmd[:, 3] - heading
+        self.relative_pos_commands[:,3] = master_loco_pos_cmd[:, 3] - heading
         loco_pos_desired_vel_x = torch.tanh(self.relative_pos_commands[:,0]) * 1
         loco_pos_desired_vel_y = torch.tanh(self.relative_pos_commands[:,1]) * 1
         loco_pos_desired_vel_z = torch.tanh(self.relative_pos_commands[:,2]) * 0.5
@@ -721,7 +800,7 @@ class UsefulHoundPrior(VecTask):
         
         # velocity command following reward 
         if(self.TrainingMode == "Locomotion_pos"):
-            lin_vel_error = torch.sum(torch.square(self.loco_pos_desired_vel[:,:2] - self.base_lin_vel[:,:2]), dim=1) #self.eef_lin_vel[:,:2]), dim=1)
+            lin_vel_error = torch.sum(torch.square(self.loco_pos_desired_vel[:,:3] - self.eef_lin_vel[:,:3]), dim=1) #self.eef_lin_vel[:,:2]), dim=1)
             ang_vel_error = torch.square(self.loco_pos_desired_vel_yaw - self.base_ang_vel[:, 2]) # yaw error
             rew_lin_vel_xy = torch.exp(-lin_vel_error/0.25) * self.rew_scales["lin_vel_xy"]
             rew_ang_vel_z = torch.exp(-ang_vel_error/0.25) * self.rew_scales["ang_vel_z"] # yaw error
@@ -730,13 +809,21 @@ class UsefulHoundPrior(VecTask):
             ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2]) # yaw error
             rew_lin_vel_xy = torch.exp(-lin_vel_error/0.25) * self.rew_scales["lin_vel_xy"]
             rew_ang_vel_z = torch.exp(-ang_vel_error/0.25) * self.rew_scales["ang_vel_z"] # yaw error
+        if self.cfg["env"]["test"] == True:
+            self.commands[:,:3] = master_loco_vel_cmd
         
         # arm command following reward
-        distance_rewards = torch.exp(-7*torch.norm(self.relative_eef_pos - self.relative_commands_pos, dim=-1)) * self.rew_scales["eef_dist_scale"] 
-        velocity_rewards = 0
-
-        distance_in_reach = (torch.norm(self.relative_eef_pos - self.relative_commands_pos, dim=-1) < 0.1)
-        velocity_rewards = torch.exp(-torch.norm(torch.cat((self.relative_eef_lin_vel, self.relative_eef_ang_vel), dim=-1), dim=-1)) * distance_in_reach * self.rew_scales["eef_vel_scale"]
+        if self.cfg["env"]["test"] == True:
+            distance_rewards = torch.exp(-7*torch.norm(self.relative_eef_pos - master_mani_cmd, dim=-1)) * self.rew_scales["eef_dist_scale"] 
+            velocity_rewards = 0
+            distance_in_reach = (torch.norm(self.relative_eef_pos - master_mani_cmd, dim=-1) < 0.1)
+            velocity_rewards = torch.exp(-torch.norm(torch.cat((self.relative_eef_lin_vel, self.relative_eef_ang_vel), dim=-1), dim=-1)) * distance_in_reach * self.rew_scales["eef_vel_scale"]  
+            self.relative_commands_pos = master_mani_cmd
+        else:
+            distance_rewards = torch.exp(-7*torch.norm(self.relative_eef_pos - self.relative_commands_pos, dim=-1)) * self.rew_scales["eef_dist_scale"] 
+            velocity_rewards = 0
+            distance_in_reach = (torch.norm(self.relative_eef_pos - self.relative_commands_pos, dim=-1) < 0.1)
+            velocity_rewards = torch.exp(-torch.norm(torch.cat((self.relative_eef_lin_vel, self.relative_eef_ang_vel), dim=-1), dim=-1)) * distance_in_reach * self.rew_scales["eef_vel_scale"]            
 
         arm_rewards = distance_rewards + velocity_rewards 
         rew_arm_rewards = torch.clip(arm_rewards, 0., None)
@@ -779,30 +866,48 @@ class UsefulHoundPrior(VecTask):
         self.stance_low_boundary = torch.tensor(-0.3, device=self.device, requires_grad=False)
         self.stance_upper_boundary = torch.tensor(0.3, device=self.device, requires_grad=False)
 
-        self.air_time_lower_boundary = torch.tensor(0.25, device=self.device, requires_grad=False)
-        self.stance_time_lower_boundary = torch.tensor(0.25, device=self.device, requires_grad=False)
+        self.air_time_lower_boundary = torch.tensor(0.2, device=self.device, requires_grad=False)
+        self.stance_time_lower_boundary = torch.tensor(0.2, device=self.device, requires_grad=False)
         self.air_time_upper_boundary = torch.tensor(0.3, device=self.device, requires_grad=False)
         self.stance_time_upper_boundary = torch.tensor(0.3, device=self.device, requires_grad=False)
-
-        if(self.TrainingMode == "Locomotion_pos"):
-            air_time_total = torch.sum(torch.minimum(torch.maximum(self.feet_stance_time - self.feet_air_time, self.stance_low_boundary), self.stance_upper_boundary) * pos_standing_mode.repeat(1, 4), dim=1)
-            air_time_total += 1.0 * torch.sum(torch.minimum(self.feet_air_time, self.air_time_lower_boundary) * (self.feet_air_time < self.air_time_upper_boundary) * (~pos_standing_mode).repeat(1, 4), dim=1)
-            air_time_total += 1.0 * torch.sum(torch.minimum(self.feet_stance_time, self.stance_time_lower_boundary) * (self.feet_stance_time < self.stance_time_upper_boundary) * (~pos_standing_mode).repeat(1, 4), dim=1)
-            rew_airTime = air_time_total * self.rew_scales["air_time"]
-        else:
-            air_time_total = torch.sum(torch.minimum(torch.maximum(self.feet_stance_time - self.feet_air_time, self.stance_low_boundary), self.stance_upper_boundary) * self.standing_mode.repeat(1, 4), dim=1)
-            air_time_total += 1.0 * torch.sum(torch.minimum(self.feet_air_time, self.air_time_lower_boundary) * (self.feet_air_time < self.air_time_upper_boundary) * (~self.standing_mode).repeat(1, 4), dim=1)
-            air_time_total += 1.0 * torch.sum(torch.minimum(self.feet_stance_time, self.stance_time_lower_boundary) * (self.feet_stance_time < self.stance_time_upper_boundary) * (~self.standing_mode).repeat(1, 4), dim=1)
-            rew_airTime = air_time_total * self.rew_scales["air_time"]
+        # print("stance:{}".format(self.feet_stance_time[0]))
+        # print("air:{}".format(self.feet_air_time[0]))
         
-        # foot clearance penalty
         foot_z = self._rigid_body_state[:, self.feet_indices, 2] 
         foot_dz = 0.15
         if(self.TrainingMode == "Locomotion_pos"):
-            rew_fcl = torch.sum(torch.square(foot_z - foot_dz) * torch.sqrt(torch.norm(self._rigid_body_state[:, self.feet_indices, 7:9], dim=2)) * (~contact) * (~pos_standing_mode).repeat(1, 4), dim=-1) * self.rew_scales["foot_clear"]
+            # air time reward
+            air_time_total = torch.sum(torch.minimum(torch.maximum(self.feet_stance_time - self.feet_air_time, self.stance_low_boundary), self.stance_upper_boundary) * pos_standing_mode.repeat(1, 4), dim=1)
+            air_time_total += 10.0 * torch.sum(torch.minimum(self.feet_air_time, self.air_time_lower_boundary) * (self.feet_air_time < self.air_time_upper_boundary) * (~pos_standing_mode).repeat(1, 4), dim=1)
+            air_time_total += 1.0 * torch.sum(torch.minimum(self.feet_stance_time, self.stance_time_lower_boundary) * (self.feet_stance_time < self.stance_time_upper_boundary) * (~pos_standing_mode).repeat(1, 4), dim=1)
+            # air_time_total += 10.0 * torch.sum(torch.minimum(self.feet_air_time, self.air_time_lower_boundary) * (self.feet_air_time < self.air_time_upper_boundary) * first_contact * (~pos_standing_mode).repeat(1, 4), dim=1)
+            # air_time_total += 1.0 * torch.sum(torch.minimum(self.feet_stance_time, self.stance_time_lower_boundary) * (self.feet_stance_time < self.stance_time_upper_boundary) * first_untact * (~pos_standing_mode).repeat(1, 4), dim=1)
+            rew_airTime = air_time_total * self.rew_scales["air_time"]
+            # foot drag penalty
+            rew_feetdrag = torch.sum(torch.norm(self._rigid_body_state[:, self.feet_indices, 7:9], dim=2) * (contact) * (self.feet_stance_time < self.stance_time_upper_boundary) * ((~pos_standing_mode).repeat(1, 4)), dim=-1) * self.rew_scales["feet_drag"]
+            # foot drag reward
+            # rew_feetdrag = torch.sum(torch.exp(-torch.norm(self._rigid_body_state[:, self.feet_indices, 7:9], dim=2)) * (contact) * (self.feet_stance_time < self.stance_time_upper_boundary) * ((~pos_standing_mode).repeat(1, 4)), dim=-1) * self.rew_scales["feet_drag"]
+            # foot clearance penalty   
+            rew_fcl = torch.sum(torch.square(foot_z - foot_dz) * torch.sqrt(torch.norm(self._rigid_body_state[:, self.feet_indices, 7:9], dim=2)) * (~contact) * (~pos_standing_mode).repeat(1, 4), dim=-1) * self.rew_scales["foot_clear"] 
+            # positive reward
+            # rew_fcl = torch.sum(torch.exp(-torch.square(foot_z - foot_dz) * torch.sqrt(torch.norm(self._rigid_body_state[:, self.feet_indices, 7:9], dim=2))) * (~contact) * (self.feet_air_time < self.air_time_upper_boundary) * (~pos_standing_mode).repeat(1, 4), dim=-1) * self.rew_scales["foot_clear"]
         else:
+            # air time reward
+            air_time_total = torch.sum(torch.minimum(torch.maximum(self.feet_stance_time - self.feet_air_time, self.stance_low_boundary), self.stance_upper_boundary) * self.standing_mode.repeat(1, 4), dim=1)
+            air_time_total += 10.0 * torch.sum(torch.minimum(self.feet_air_time, self.air_time_lower_boundary) * (self.feet_air_time < self.air_time_upper_boundary) * (~self.standing_mode).repeat(1, 4), dim=1)
+            air_time_total += 1.0 * torch.sum(torch.minimum(self.feet_stance_time, self.stance_time_lower_boundary) * (self.feet_stance_time < self.stance_time_upper_boundary) * (~self.standing_mode).repeat(1, 4), dim=1)
+            # air_time_total += 10.0 * torch.sum(torch.minimum(self.feet_air_time, self.air_time_lower_boundary) * (self.feet_air_time < self.air_time_upper_boundary) * first_contact * (~self.standing_mode).repeat(1, 4), dim=1)
+            # air_time_total += 1.0 * torch.sum(torch.minimum(self.feet_stance_time, self.stance_time_lower_boundary) * (self.feet_stance_time < self.stance_time_upper_boundary) * first_untact * (~self.standing_mode).repeat(1, 4), dim=1)
+            rew_airTime = air_time_total * self.rew_scales["air_time"]
+            # foot drag penalty
+            rew_feetdrag = torch.sum(torch.norm(self._rigid_body_state[:, self.feet_indices, 7:9], dim=2) * (contact) * (self.feet_stance_time < self.stance_time_upper_boundary) * ((~self.standing_mode).repeat(1, 4)), dim=-1) * self.rew_scales["feet_drag"]
+            # foot drag reward
+            # rew_feetdrag = torch.sum(torch.exp(-torch.norm(self._rigid_body_state[:, self.feet_indices, 7:9], dim=2)) * (contact) * (self.feet_stance_time < self.stance_time_upper_boundary) * (~self.standing_mode.repeat(1, 4)), dim=-1) * self.rew_scales["feet_drag"]
+            # foot clearance penalty
             rew_fcl = torch.sum(torch.square(foot_z - foot_dz) * torch.sqrt(torch.norm(self._rigid_body_state[:, self.feet_indices, 7:9], dim=2)) * (~contact) * (~self.standing_mode).repeat(1, 4), dim=-1) * self.rew_scales["foot_clear"]
-        
+            # positive reward
+            # rew_fcl = torch.sum(torch.exp(-torch.square(foot_z - foot_dz) * torch.sqrt(torch.norm(self._rigid_body_state[:, self.feet_indices, 7:9], dim=2))) * (~contact) * (self.feet_air_time < self.air_time_upper_boundary) * (~self.standing_mode).repeat(1, 4), dim=-1) * self.rew_scales["foot_clear"]
+
         # other base velocity penalties
         rew_lin_vel_z = torch.square(self.base_lin_vel[:, 2]) * self.rew_scales["lin_vel_z"]
         rew_ang_vel_xy = torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1) * self.rew_scales["ang_vel_xy"]
@@ -852,9 +957,10 @@ class UsefulHoundPrior(VecTask):
         # pos_rew = rew_lin_vel_xy + rew_ang_vel_z + rew_arm_rewards + rew_imitate + rew_airTime
         # neg_rew = rew_hip + rew_action_rate + rew_stumble + rew_mani_joint_acc + rew_loco_joint_acc + rew_loco_dof_vel + rew_mani_dof_vel + rew_torque + rew_base_height + rew_orient + rew_basepos + rew_ang_vel_rpy + rew_lin_vel_xyz + rew_ang_vel_xy + rew_lin_vel_z + rew_fcl
         # self.rew_buf = pos_rew*torch.exp(0.2*neg_rew)
-        self.rew_buf = rew_fcl + rew_hip + rew_lin_vel_xy + rew_ang_vel_z + rew_lin_vel_z + rew_ang_vel_xy + rew_arm_rewards + rew_mani_joint_acc + rew_mani_dof_vel + rew_torque + rew_loco_dof_vel + rew_lin_vel_xyz + rew_ang_vel_rpy + rew_orient + rew_basepos + rew_base_height + rew_loco_joint_acc + rew_stumble + rew_action_rate + rew_imitate + rew_airTime
+        self.rew_buf = rew_feetdrag + rew_fcl + rew_hip + rew_lin_vel_xy + rew_ang_vel_z + rew_lin_vel_z + rew_ang_vel_xy + rew_arm_rewards + rew_mani_joint_acc + rew_mani_dof_vel + rew_torque + rew_loco_dof_vel + rew_lin_vel_xyz + rew_ang_vel_rpy + rew_orient + rew_basepos + rew_base_height + rew_loco_joint_acc + rew_stumble + rew_action_rate + rew_imitate + rew_airTime
         self.rew_buf = torch.clip(self.rew_buf, min=0., max=None)
         # log episode reward sums
+        self.episode_sums["feet_drag"] += rew_feetdrag
         self.episode_sums["hip_cosmetic"] += rew_hip
         self.episode_sums["airTime"] += rew_airTime
         self.episode_sums["feet_clear"] += rew_fcl
@@ -1055,11 +1161,13 @@ class UsefulHoundPrior(VecTask):
         self.gym.refresh_mass_matrix_tensors(self.sim)
         self.progress_buf += 1
         self.randomize_buf += 1
-
-        if(self.pushrobot == True):
-            self.common_step_counter += 1
+        self.common_step_counter += 1
+        if(self.pushrobot == True):   
             if self.common_step_counter % self.push_interval == 0:
                 self.push_robots()
+
+        if self.common_step_counter % self.command_interval == 0:
+            self.update_commands(torch.arange(self.num_envs, device=self.device))
 
         # prepare quantities
         self.base_quat = self.base_states[:, 3:7]

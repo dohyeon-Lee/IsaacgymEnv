@@ -5,7 +5,7 @@ physics_engine: 'physx'
 
 env:
   test: false
-  mode: Locomotion_pos # WholeBody_Locomotion | WholeBody_Manipulation | Locomotion_pos | Locomotion_vel | Manipulation
+  mode: Locomotion_vel # WholeBody_Locomotion | WholeBody_Manipulation | Locomotion_pos | Locomotion_vel | Manipulation
   ManipulationControlType: joint # osc | joint
   
   numEnvs: ${resolve_default:4096,${...num_envs}}
@@ -46,12 +46,12 @@ env:
   randomCommandPositionRanges:
     x: [-3., 3.]
     y: [-3., 3.]
-    z: [1, 2]
+    z: [0.8, 1]
     yaw: [-3.14, 3.14]
   randomCommandVelocityRanges:
     # train
-    linear_x: [-2., 2.] # min max [m/s]
-    linear_y: [-1., 1.]   # min max [m/s]
+    linear_x: [-1., 1.] # min max [m/s]
+    linear_y: [-0.5, 0.5]   # min max [m/s]
     #yaw: [-3.14, 3.14]
     yaw: [-0.5, 0.5]    # min max [rad/s]
 
@@ -92,7 +92,7 @@ env:
     RR_knee_joint: -1.5708   # [rad]
 
   urdfAsset:
-    file: "urdf/UsefulHound/urdf/Hound.urdf"
+    file: "urdf/UsefulHound/urdf/Hound.urdf" #"urdf/UsefulHound/urdf/Hound.urdf"
     footName: "foot" # SHANK if collapsing fixed joint, FOOT otherwise
     kneeName: "thigh"
     shoulderName: "shoulder"
@@ -107,29 +107,30 @@ env:
     # rewards
     linearVelocityXYRewardScale: 1.0    # Locomotion_vel, +
     angularVelocityZRewardScale: 0.5    # Locomotion_vel, +
-    feetAirTimeRewardScale:  0.2 #0.05 #0.2 #1.0   # Locomotion_vel, +
+    feetAirTimeRewardScale:  0.2        # Locomotion_vel, +
     linearVelocityZRewardScale: -0.4    # Locomotion_vel, -
     angularVelocityXYRewardScale: -0.05 # Locomotion_vel, -
-    feetclearRewardScale: -15.0          # Locomotion_vel, -
-    
+    feetclearRewardScale: -10 # -1            # Locomotion_vel, -
+    feetDragRewardScale: -0.05          # Locomotion_vel, -
+
     eefdistRewardScale: 1.5             # Manipulation, +
     eefvelRewardScale: 0                # Manipulation, +
-    imitateRewardScale : 1 # 0.2            # Manipulation, +
-    angvelrpyRewardScale : -0.1 #-1           # Manipulation, - # this scale is to big
-    linvelxyzRewardScale : -0.1 #-1           # Manipulation, -
-    baseposRewardScale : -0.1 #-1             # Manipulation, -
+    imitateRewardScale : 1 # 0.2        # Manipulation, +
+    angvelrpyRewardScale : -0.1 #-1     # Manipulation, - # this scale is to big
+    linvelxyzRewardScale : -0.1 #-1     # Manipulation, -
+    baseposRewardScale : -0.1 #-1       # Manipulation, -
   
-    manijointVelRewardScale: -0.0003 #-0.00003 #-0
-    manijointAccRewardScale: -0.00025 #-0.0000025  #-0
-    locojointVelRewardScale: -0.00003 #-0.00003
-    locojointAccRewardScale: -0.0000025 #-0.0000025 
-    torqueRewardScale: -0.0000025 #exp3:-0.00025 #exp2: -0.0000025 ## scale down need
-    actionRateRewardScale: -0.0001 #exp3:-0.001 #exp2: -0.0001 
-    hipRewardScale: -0.1 # -0.1
+    manijointVelRewardScale: -0.0003
+    manijointAccRewardScale: -0.00025 
+    locojointVelRewardScale: -0.0003  #-0.00003 
+    locojointAccRewardScale: -0.00005 # -0.0000025 
+    torqueRewardScale: -0.0000025 
+    actionRateRewardScale: -0.001 #-0.0001 
+    hipRewardScale: -0.1
 
     terminalReward: 0.0
-    orientationRewardScale: -0.1 
-    baseHeightRewardScale:  -0.1  #-0.1 #-5 
+    orientationRewardScale: -1 #-0.1 
+    baseHeightRewardScale: -1 #-0.1
     feetStumbleRewardScale: -0. 
     kneeCollisionRewardScale: -0.25 
     
@@ -159,7 +160,7 @@ env:
     frictionRange: [0.5, 1.25]
     pushRobots: true
     pushInterval_s: 15
-
+    commandInterval_s: 5
     # episode length in seconds
     episodeLength_s: 10 #4 #10 #20
 
