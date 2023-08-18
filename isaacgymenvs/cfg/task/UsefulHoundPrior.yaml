@@ -107,7 +107,7 @@ env:
     # rewards
     linearVelocityXYRewardScale: 1.0    # Locomotion_vel, +
     angularVelocityZRewardScale: 0.5    # Locomotion_vel, +
-    feetAirTimeRewardScale:  0.2        # Locomotion_vel, +
+    feetAirTimeRewardScale:  0.02 #0.2        # Locomotion_vel, +
     linearVelocityZRewardScale: -0.4    # Locomotion_vel, -
     angularVelocityXYRewardScale: -0.05 # Locomotion_vel, -
     feetclearRewardScale: -15 #-10      # Locomotion_vel, -
@@ -128,7 +128,7 @@ env:
     torqueRewardScale: -0.0000025 
     actionRateRewardScale: -0.001  
     action2RateRewardScale: -0.0005
-    jointposRewardScale: -0.75
+    jointposRewardScale: -0.75 #-1.5 #-0.75
     orientationRewardScale: -1  
 
     # linearVelocityXYRewardScale: 3    # Locomotion_vel, +

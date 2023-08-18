@@ -43,7 +43,8 @@ params:
 
   load_checkpoint: ${if:${...checkpoint},True,False} # flag which sets whether to load the checkpoint
   load_path: ${...checkpoint} # path to the checkpoint to load
-
+  # load_checkpoint: False
+  # load_path: nn/UsefulHoundPriorSAC.pth
   config:
     name: ${resolve_default:UsefulHoundPriorSAC,${....experiment}}
     full_experiment_name: ${.name}
